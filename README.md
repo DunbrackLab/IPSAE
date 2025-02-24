@@ -6,6 +6,11 @@ Simply download the Python script ipsae.py. It may be necessary to install the P
 
     pip install numpy
 
+## For Apple Silicon
+
+If you use conda to manage your environments this recipe works:
+mamba create -n ipsae python=3.9 numpy=1.20.3
+
 # Usage:                                                                                                                                                                                                     
 AlphaFold2:
 
