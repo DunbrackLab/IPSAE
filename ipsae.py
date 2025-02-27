@@ -301,7 +301,7 @@ if af3:
     # Create a composite key for residue and chain: e.g. 1A, 2A, 3A,...
     token_chain_ids = np.array(data['token_chain_ids'])
     token_res_ids =   np.array(data['token_res_ids'])
-    composite_key = np.char.add(token_res_ids.astype(str), token_chain_ids) 
+    composite_key =   np.char.add(token_res_ids.astype(str), token_chain_ids)
     
     # Detect changes including the first element
     changes = np.concatenate(([True], composite_key[1:] != composite_key[:-1]))
@@ -328,17 +328,15 @@ if af3:
 
     # Get iptm matrix from AF3 summary_confidences file
     iptm_af3=   {chain1: {chain2: 0     for chain2 in unique_chains if chain1 != chain2} for chain1 in unique_chains}
-
-    json_summary_file_path1="summary_" + json_file_path
+    json_summary_file_path1=json_file_path.replace("confidences","summary_confidences")
     json_summary_file_path2=json_file_path.replace("full_data","summary_confidences")
     json_summary_file_path=None
     if os.path.exists(json_summary_file_path1): json_summary_file_path=json_summary_file_path1    # for local AF3 installation
     elif os.path.exists(json_summary_file_path2): json_summary_file_path=json_summary_file_path2  # for AF3 server files
-    
+
     if json_summary_file_path is not None:
         with open(json_summary_file_path,'r') as file:
             data_summary=json.load(file)
-            
         af3_chain_pair_iptm_data=data_summary['chain_pair_iptm']
         for chain1 in unique_chains:
             nchain1=  ord(chain1) - ord('A')  # map A,B,C... to 0,1,2...
