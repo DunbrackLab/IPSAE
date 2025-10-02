@@ -465,11 +465,9 @@ if boltz1:
             data_summary = json.load(file)
 
             boltz1_chain_pair_iptm_data=data_summary['pair_chains_iptm']
-            for chain1 in unique_chains:
-                nchain1=  ord(chain1) - ord('A')  # map A,B,C... to 0,1,2...
-                for chain2 in unique_chains:
+            for nchain1, chain1 in enumerate(unique_chains):
+                for nchain2, chain2 in enumerate(unique_chains):
                     if chain1 == chain2: continue
-                    nchain2=ord(chain2) - ord('A')
                     iptm_boltz1[chain1][chain2]=boltz1_chain_pair_iptm_data[str(nchain1)][str(nchain2)]
     else:
         print("Boltz1 summary file does not exist: ", summary_file_path)
@@ -519,11 +517,9 @@ if af3:
         with open(summary_file_path,'r') as file:
             data_summary=json.load(file)
         af3_chain_pair_iptm_data=data_summary['chain_pair_iptm']
-        for chain1 in unique_chains:
-            nchain1=  ord(chain1) - ord('A')  # map A,B,C... to 0,1,2...
-            for chain2 in unique_chains:
+        for nchain1, chain1 in enumerate(unique_chains):
+            for nchain2, chain2 in enumerate(unique_chains):
                 if chain1 == chain2: continue
-                nchain2=ord(chain2) - ord('A')
                 iptm_af3[chain1][chain2]=af3_chain_pair_iptm_data[nchain1][nchain2]
     else:
         print("AF3 summary file does not exist: ", summary_file_path)
