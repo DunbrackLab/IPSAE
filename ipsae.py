@@ -47,6 +47,7 @@ import math
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import overload
 
 import numpy as np
 
@@ -239,10 +240,11 @@ def ptm_func(x: float, d0: float) -> float:
 ptm_func_vec = np.vectorize(ptm_func)
 
 
-def calc_d0(length: float, pair_type: str) -> float:
+def calc_d0(length: int | float, pair_type: str) -> float:
     """Calculate the normalization factor d0 for TM-score.
 
     Formula from Yang and Skolnick, PROTEINS: Structure, Function, and Bioinformatics 57:702-710 (2004).
+
     d0 = 1.24 * (L - 15)^(1/3) - 1.8
     Minimum value is 1.0 (or 2.0 for nucleic acids).
 
@@ -254,7 +256,6 @@ def calc_d0(length: float, pair_type: str) -> float:
     -------
         The calculated d0 value.
     """
-    length = float(length)
     length = max(length, 27)
     min_value = 1.0
     if pair_type == "nucleic_acid":
@@ -395,9 +396,19 @@ def contiguous_ranges(numbers: set[int]) -> str | None:
     return "+".join(ranges)
 
 
+@overload
 def init_chainpairdict_zeros(
-    chainlist: list[str] | np.ndarray, zero: int | float | str = 0
-) -> dict[str, dict[str, int | float | str]]:
+    chainlist: list[str] | np.ndarray, zero: int
+) -> dict[str, dict[str, int]]: ...
+@overload
+def init_chainpairdict_zeros(
+    chainlist: list[str] | np.ndarray, zero: float
+) -> dict[str, dict[str, float]]: ...
+@overload
+def init_chainpairdict_zeros(
+    chainlist: list[str] | np.ndarray, zero: str
+) -> dict[str, dict[str, str]]: ...
+def init_chainpairdict_zeros(chainlist, zero=0):
     """Initialize a nested dictionary for chain pairs with zero values."""
     return {c1: {c2: zero for c2 in chainlist if c1 != c2} for c1 in chainlist}
 
@@ -743,55 +754,16 @@ def load_pae_data(
     )
 
 
-def calculate_scores(
-    structure: StructureData,
-    pae_data: PAEData,
-    pae_cutoff: float = 10.0,
-    dist_cutoff: float = 10.0,
-    pdb_stem: str = "model",
-) -> ScoreResults:
-    """Calculate ipSAE, ipTM, pDockQ, pDockQ2, and LIS scores.
-
-    This is the main calculation engine. It iterates over all chain pairs and computes:
-    - ipSAE: Inter-protein Predicted Aligned Error score.
-    - ipTM: Inter-protein Template Modeling score.
-    - pDockQ: Predicted DockQ score (Bryant et al.).
-    - pDockQ2: Improved pDockQ score (Zhu et al.).
-    - LIS: Local Interaction Score (Kim et al.).
-
-    It also generates the formatted output lines for the summary file, per-residue file,
-    and PyMOL script.
-
-    Args:
-        structure: Parsed structure data.
-        pae_data: Loaded PAE and pLDDT data.
-        pae_cutoff: Cutoff for PAE to consider a residue pair "good" (default: 10.0).
-        dist_cutoff: Distance cutoff for contact definition (default: 10.0).
-        pdb_stem: Stem of the PDB filename (for output labeling).
-
-    Returns:
-    -------
-        A ScoreResults object containing all calculated scores and output strings.
-    """
-    unique_chains = structure.unique_chains
-    numres = structure.numres
-    chains = structure.chains
-    distances = structure.distances
-    pae_matrix = pae_data.pae_matrix
-    cb_plddt = pae_data.cb_plddt
-    plddt = pae_data.plddt
-    residues = structure.residues
-
-    # Initialize result containers
-    pDockQ = init_chainpairdict_zeros(unique_chains)
-    pDockQ2 = init_chainpairdict_zeros(unique_chains)
-    LIS = init_chainpairdict_zeros(unique_chains)
-
-    # Helper sets
+def calculate_pdockq(
+    chains: np.ndarray,
+    unique_chains: np.ndarray,
+    distances: np.ndarray,
+    cb_plddt: np.ndarray,
+    pdockq_dist_cutoff: float = 8.0,
+):
+    """Calculate pDockQ scores for all chain pairs."""
+    pDockQ = init_chainpairdict_zeros(unique_chains, 0.0)
     pDockQ_unique_residues = init_chainpairdict_set(unique_chains)
-
-    # --- pDockQ ---
-    pdockq_dist_cutoff = 8.0
     for c1 in unique_chains:
         for c2 in unique_chains:
             if c1 == c2:
@@ -825,7 +797,19 @@ def calculate_scores(
             else:
                 pDockQ[c1][c2] = 0.0
 
-    # --- pDockQ2 ---
+    return pDockQ
+
+
+def calculate_pdockq2(
+    chains: np.ndarray,
+    unique_chains: np.ndarray,
+    distances: np.ndarray,
+    pae_matrix: np.ndarray,
+    cb_plddt: np.ndarray,
+    pdockq_dist_cutoff: float = 8.0,
+):
+    """Calculate pDockQ2 scores for all chain pairs."""
+    pDockQ2 = init_chainpairdict_zeros(unique_chains, 0.0)
     for c1 in unique_chains:
         for c2 in unique_chains:
             if c1 == c2:
@@ -858,7 +842,14 @@ def calculate_scores(
             else:
                 pDockQ2[c1][c2] = 0.0
 
-    # --- LIS ---
+    return pDockQ2
+
+
+def calculate_lis(
+    chains: np.ndarray, unique_chains: np.ndarray, pae_matrix: np.ndarray
+):
+    """Calculate LIS scores for all chain pairs."""
+    LIS = init_chainpairdict_zeros(unique_chains, 0.0)
     for c1 in unique_chains:
         for c2 in unique_chains:
             if c1 == c2:
@@ -877,17 +868,84 @@ def calculate_scores(
             else:
                 LIS[c1][c2] = 0.0
 
+    return LIS
+
+
+def calculate_scores(
+    structure: StructureData,
+    pae_data: PAEData,
+    pae_cutoff: float = 10.0,
+    dist_cutoff: float = 10.0,
+    pdb_stem: str = "model",
+) -> ScoreResults:
+    """Calculate chain-pair-specific ipSAE, ipTM, pDockQ, pDockQ2, and LIS scores.
+
+    This is the main calculation engine. It iterates over all chain pairs and computes:
+    - ipSAE: Inter-protein Predicted Aligned Error score.
+    - ipTM: Inter-protein Template Modeling score.
+    - pDockQ: Predicted DockQ score (Bryant et al.).
+    - pDockQ2: Improved pDockQ score (Zhu et al.).
+    - LIS: Local Interaction Score (Kim et al.).
+
+    Nomenclature:
+    - iptm_d0chn: calculate iptm from PAEs with no PAE cutoff
+        d0 = numres in chain pair = len(chain1) + len(chain2)
+    - ipsae_d0chn: calculate ipsae from PAEs with PAE cutoff
+        d0 = numres in chain pair = len(chain1) + len(chain2)
+    - ipsae_d0dom: calculate ipsae from PAEs with PAE cutoff
+        d0 from number of residues in chain1 and chain2 that have interchain PAE<cutoff
+    - ipsae_d0res: calculate ipsae from PAEs with PAE cutoff
+        d0 from number of residues in chain2 that have interchain PAE<cutoff given residue in chain1
+
+    for each chain_pair iptm/ipsae, there is (for example)
+    - ipsae_d0res_byres: by-residue array;
+    - ipsae_d0res_asym: asymmetric pair value (A->B is different from B->A)
+    - ipsae_d0res_max: maximum of A->B and B->A value
+    - ipsae_d0res_asymres: identify of residue that provides each asym maximum
+    - ipsae_d0res_maxres: identify of residue that provides each maximum over both chains
+
+    - n0num: number of residues in whole complex provided by AF2 model
+    - n0chn: number of residues in chain pair = len(chain1) + len(chain2)
+    - n0dom: number of residues in chain pair that have good PAE values (<cutoff)
+    - n0res: number of residues in chain2 that have good PAE residues for each residue of chain1
+
+    Args:
+        structure: Parsed structure data.
+        pae_data: Loaded PAE and pLDDT data.
+        pae_cutoff: Cutoff for PAE to consider a residue pair "good" (default: 10.0).
+        dist_cutoff: Distance cutoff for contact definition (default: 10.0).
+        pdb_stem: Stem of the PDB filename (for output labeling).
+
+    Returns:
+    -------
+        A ScoreResults object containing all calculated scores and output strings.
+    """
+    chains = structure.chains
+    unique_chains = structure.unique_chains
+    distances = structure.distances
+    pae_matrix = pae_data.pae_matrix
+    cb_plddt = pae_data.cb_plddt
+    plddt = pae_data.plddt
+
+    # Calculate scores
+    pDockQ = calculate_pdockq(chains, unique_chains, distances, cb_plddt)
+    pDockQ2 = calculate_pdockq2(chains, unique_chains, distances, pae_matrix, cb_plddt)
+    LIS = calculate_lis(chains, unique_chains, pae_matrix)
+
     # --- ipTM / ipSAE ---
     # Initialize containers
+    residues = structure.residues
+    numres = structure.numres
+
     iptm_d0chn_byres = init_chainpairdict_npzeros(unique_chains, numres)
     ipsae_d0chn_byres = init_chainpairdict_npzeros(unique_chains, numres)
     ipsae_d0dom_byres = init_chainpairdict_npzeros(unique_chains, numres)
     ipsae_d0res_byres = init_chainpairdict_npzeros(unique_chains, numres)
 
-    n0chn = init_chainpairdict_zeros(unique_chains)
-    d0chn = init_chainpairdict_zeros(unique_chains)
-    n0dom = init_chainpairdict_zeros(unique_chains)
-    d0dom = init_chainpairdict_zeros(unique_chains)
+    n0chn = init_chainpairdict_zeros(unique_chains, 0)
+    d0chn = init_chainpairdict_zeros(unique_chains, 0.0)
+    n0dom = init_chainpairdict_zeros(unique_chains, 0)
+    d0dom = init_chainpairdict_zeros(unique_chains, 0.0)
     n0res_byres = init_chainpairdict_npzeros(unique_chains, numres)
     d0res_byres = init_chainpairdict_npzeros(unique_chains, numres)
 
@@ -896,8 +954,8 @@ def calculate_scores(
     dist_unique_residues_chain1 = init_chainpairdict_set(unique_chains)
     dist_unique_residues_chain2 = init_chainpairdict_set(unique_chains)
 
-    valid_pair_counts = init_chainpairdict_zeros(unique_chains)
-    dist_valid_pair_counts = init_chainpairdict_zeros(unique_chains)
+    valid_pair_counts = init_chainpairdict_zeros(unique_chains, 0)
+    dist_valid_pair_counts = init_chainpairdict_zeros(unique_chains, 0)
 
     # First pass: d0chn
     for c1 in unique_chains:
@@ -908,12 +966,12 @@ def calculate_scores(
             c1_indices = np.where(chains == c1)[0]
             c2_indices = np.where(chains == c2)[0]
 
-            n0chn[c1][c2] = len(c1_indices) + len(c2_indices)
+            n0chn[c1][c2] = len(c1_indices) + len(c2_indices)  # Total #res in chain1+2
             d0chn[c1][c2] = calc_d0(n0chn[c1][c2], structure.chain_pair_type[c1][c2])
 
             # Precompute PTM matrix for this d0
             # We only need the submatrix [c1_indices, c2_indices] really, but original code does full row
-            # Optimization: only compute for c1 rows
+            # TODO Optimization: only compute for c1 rows
 
             for i in c1_indices:
                 # Row i, columns in c2
