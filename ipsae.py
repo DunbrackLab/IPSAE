@@ -44,12 +44,14 @@ import argparse
 import json
 import logging
 import math
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 
-logger = logging.getLogger(__name__)
+logging.basicConfig(level=os.environ.get("LOGLEVEL", "INFO").upper())
+logger = logging.getLogger("ipSAE")
 
 # Constants
 LIS_PAE_CUTOFF = 12
@@ -299,7 +301,8 @@ def parse_pdb_atom_line(line: str) -> dict | None:
         x = float(line[30:38].strip())
         y = float(line[38:46].strip())
         z = float(line[46:54].strip())
-    except ValueError:
+    except ValueError as e:
+        logger.debug(f"Failed to parse PDB line: {line.strip()} with error: {e}")
         return None
     else:
         return {
@@ -316,6 +319,9 @@ def parse_pdb_atom_line(line: str) -> dict | None:
 
 def parse_cif_atom_line(line: str, fielddict: dict[str, int]) -> dict | None:
     """Parse a line from an mmCIF file.
+
+    Note that ligands do not have residue numbers, but modified residues do.
+    We return `None` for ligands.
 
     Args:
         line: A line from an mmCIF file.
@@ -339,7 +345,8 @@ def parse_cif_atom_line(line: str, fielddict: dict[str, int]) -> dict | None:
         x = float(linelist[fielddict["Cartn_x"]])
         y = float(linelist[fielddict["Cartn_y"]])
         z = float(linelist[fielddict["Cartn_z"]])
-    except (ValueError, IndexError, KeyError):
+    except (ValueError, IndexError, KeyError) as e:
+        logger.debug(f"Failed to parse mmCIF line: {line.strip()} with error: {e}")
         return None
     else:
         return {
@@ -356,6 +363,8 @@ def parse_cif_atom_line(line: str, fielddict: dict[str, int]) -> dict | None:
 
 def contiguous_ranges(numbers: set[int]) -> str | None:
     """Format a set of numbers into a string of contiguous ranges.
+
+    This is for printing out residue ranges in PyMOL scripts.
 
     Example: {1, 2, 3, 5, 7, 8} -> "1-3+5+7-8"
 
@@ -387,10 +396,10 @@ def contiguous_ranges(numbers: set[int]) -> str | None:
 
 
 def init_chainpairdict_zeros(
-    chainlist: list[str] | np.ndarray,
-) -> dict[str, dict[str, int]]:
+    chainlist: list[str] | np.ndarray, zero: int | float | str = 0
+) -> dict[str, dict[str, int | float | str]]:
     """Initialize a nested dictionary for chain pairs with zero values."""
-    return {c1: {c2: 0 for c2 in chainlist if c1 != c2} for c1 in chainlist}
+    return {c1: {c2: zero for c2 in chainlist if c1 != c2} for c1 in chainlist}
 
 
 def init_chainpairdict_npzeros(
@@ -411,7 +420,7 @@ def init_chainpairdict_set(
 
 
 def classify_chains(chains: np.ndarray, residue_types: np.ndarray) -> dict[str, str]:
-    """Classify chains as 'protein' or 'nucleic_acid' based on residue types.
+    """Classify chains as 'protein' or 'nucleic_acid' based on residue types for d0 calculation.
 
     Args:
         chains: Array of chain identifiers.
@@ -431,7 +440,7 @@ def classify_chains(chains: np.ndarray, residue_types: np.ndarray) -> dict[str, 
     return chain_types
 
 
-def load_structure(pdb_path: Path) -> StructureData:
+def load_structure(struct_path: Path) -> StructureData:
     """Parse a PDB or mmCIF file to extract structure data.
 
     Reads the file to identify residues, coordinates (CA and CB), and chains.
@@ -439,7 +448,7 @@ def load_structure(pdb_path: Path) -> StructureData:
     Classifies chain pairs as protein-protein, protein-nucleic acid, etc.
 
     Args:
-        pdb_path: Path to the PDB or mmCIF file.
+        struct_path: Path to the PDB or mmCIF file.
 
     Returns:
     -------
@@ -448,14 +457,18 @@ def load_structure(pdb_path: Path) -> StructureData:
     residues = []
     cb_residues = []
     chains_list = []
+
+    # For af3 and boltz1: need mask to identify CA atom tokens in plddt vector and pae matrix;
+    # Skip ligand atom tokens and non-CA-atom tokens in PTMs (those not in RESIDUE_SET)
     token_mask = []
     atomsitefield_dict = {}
     atomsitefield_num = 0
 
-    is_cif = pdb_path.endswith(".cif")
+    is_cif = struct_path.suffix == ".cif"
 
-    with Path(pdb_path).open() as f:
+    with struct_path.open() as f:
         for raw_line in f:
+            # mmCIF _atom_site loop headers
             if raw_line.startswith("_atom_site."):
                 line = raw_line.strip()
                 parts = line.split(".")
@@ -463,6 +476,7 @@ def load_structure(pdb_path: Path) -> StructureData:
                     atomsitefield_dict[parts[1]] = atomsitefield_num
                     atomsitefield_num += 1
 
+            # Atom coordinates
             if raw_line.startswith(("ATOM", "HETATM")):
                 if is_cif:
                     atom = parse_cif_atom_line(raw_line, atomsitefield_dict)
@@ -474,7 +488,7 @@ def load_structure(pdb_path: Path) -> StructureData:
                     continue
 
                 # CA or C1' (nucleic acid)
-                if atom["atom_name"] == "CA" or "C1" in atom["atom_name"]:
+                if (atom["atom_name"] == "CA") or ("C1" in atom["atom_name"]):
                     token_mask.append(1)
                     res_obj = Residue(
                         atom_num=atom["atom_num"],
@@ -489,8 +503,8 @@ def load_structure(pdb_path: Path) -> StructureData:
 
                 # CB or C3' or GLY CA
                 if (
-                    atom["atom_name"] == "CB"
-                    or "C3" in atom["atom_name"]
+                    (atom["atom_name"] == "CB")
+                    or ("C3" in atom["atom_name"])
                     or (atom["residue_name"] == "GLY" and atom["atom_name"] == "CA")
                 ):
                     res_obj = Residue(
@@ -504,22 +518,26 @@ def load_structure(pdb_path: Path) -> StructureData:
                     cb_residues.append(res_obj)
 
                 # Non-CA/C1' atoms in standard residues -> token 0
+                # Nucleic acids and non-CA atoms in PTM residues to tokens (as 0), whether labeled as "HETATM" (af3) or as "ATOM" (boltz1)
                 if (
-                    atom["atom_name"] != "CA"
-                    and "C1" not in atom["atom_name"]
-                    and atom["residue_name"] not in RESIDUE_SET
+                    (atom["atom_name"] != "CA")
+                    and ("C1" not in atom["atom_name"])
+                    and (atom["residue_name"] not in RESIDUE_SET)
                 ):
                     token_mask.append(0)
 
+    logger.debug(f"Parsed _atom_site fields: {atomsitefield_dict}")
+
+    # Convert structure information to numpy arrays
     numres = len(residues)
     coordinates = np.array([r.coor for r in cb_residues])
     chains = np.array(chains_list)
-    unique_chains = np.unique(chains)
+    unique_chains = np.unique(chains)  # TODO: does the order matter?
     token_array = np.array(token_mask)
     residue_types = np.array([r.res for r in residues])
 
     chain_dict = classify_chains(chains, residue_types)
-    chain_pair_type = init_chainpairdict_zeros(unique_chains)
+    chain_pair_type = init_chainpairdict_zeros(unique_chains, "0")
     for c1 in unique_chains:
         for c2 in unique_chains:
             if c1 == c2:
@@ -534,7 +552,7 @@ def load_structure(pdb_path: Path) -> StructureData:
         diff = coordinates[:, np.newaxis, :] - coordinates[np.newaxis, :, :]
         distances = np.sqrt((diff**2).sum(axis=2))
     else:
-        distances = np.zeros((0, 0))
+        distances = np.zeros((0, 0), dtype=float)
 
     return StructureData(
         residues=residues,
@@ -553,10 +571,30 @@ def load_structure(pdb_path: Path) -> StructureData:
 def load_pae_data(
     pae_path: Path, structure_data: StructureData, model_type: str
 ) -> PAEData:
-    """Load PAE and pLDDT data from various file formats.
+    """Load PAE, pLDDT, and other scores from various file formats.
 
-    Supports AlphaFold2 (JSON/PKL), AlphaFold3 (JSON), and Boltz1 (NPZ) formats.
-    Extracts PAE matrix, pLDDT scores, and ipTM scores if available.
+    In addition to `pae_path` passed by the user, we also try to load score
+    files based on inferred model types.
+
+    | Model type | File type | Filename pattern                          |
+    |-----------:|:----------|:------------------------------------------|
+    | AF3 server | Structure | fold_[name]_model_0.cif                   |
+    |            | PAE       | fold_[name]_full_data_0.json              |
+    |            | ipTM      | fold_[name]_summary_confidences_0.json    |
+    | AF3 local  | Structure | model1.cif                                |
+    |            | PAE       | confidences.json                          |
+    |            | ipTM      | summary_confidences.json                  |
+    | Boltz      | Structure | [name]_model_0.cif                        |
+    |            | PAE       | pae_[name]_model_0.npz                    |
+    |            | ipTM      | confidence_[name]_model_0.json            |
+    |            | plDDT     | plddt_[name]_model_0.npz                  |
+    | AF2        | Structure | *.pdb                                     |
+    |            | PAE       | *.json                                    |
+
+    TODO: support Chai-1 models.
+        plDDT needs to be extracted from cif structure files.
+        pae needs to be dumped from Chai-1 into (n_samples, N, N) npy files.
+        ptm, iptm, per_chain_pair_iptm are in the scores npz files.
 
     Args:
         pae_path: Path to the PAE file.
@@ -567,22 +605,28 @@ def load_pae_data(
     -------
         A PAEData object containing the loaded scores.
     """
+    if not pae_path.exists():
+        raise FileNotFoundError(f"PAE file not found: {pae_path}")
+
     unique_chains = structure_data.unique_chains
     numres = structure_data.numres
     token_array = structure_data.token_mask
+    mask_bool = token_array.astype(bool)
 
+    # Initialize scores to be loaded
     pae_matrix = np.zeros((numres, numres))
     plddt = np.zeros(numres)
     cb_plddt = np.zeros(numres)
-    iptm_dict = init_chainpairdict_zeros(unique_chains)
+    iptm_dict = init_chainpairdict_zeros(unique_chains, 0.0)
     iptm_val = -1.0
     ptm_val = -1.0
 
     if model_type == "af2":
-        if pae_path.endswith(".pkl"):
+        # Load all scores from input PAE file
+        if pae_path.suffix == ".pkl":
             data = np.load(pae_path, allow_pickle=True)
         else:
-            with Path(pae_path).open() as f:
+            with pae_path.open() as f:
                 data = json.load(f)
 
         iptm_val = float(data.get("iptm", -1.0))
@@ -590,46 +634,45 @@ def load_pae_data(
 
         if "plddt" in data:
             plddt = np.array(data["plddt"])
-            cb_plddt = np.array(data["plddt"])
+            cb_plddt = np.array(data["plddt"])  # for pDockQ
+        else:
+            logger.warning(f"pLDDT scores not found in AF2 PAE file: {pae_path}")
 
         if "pae" in data:
             pae_matrix = np.array(data["pae"])
         elif "predicted_aligned_error" in data:
             pae_matrix = np.array(data["predicted_aligned_error"])
+        else:
+            logger.warning(f"PAE matrix not found in AF2 PAE file: {pae_path}")
 
     elif model_type == "boltz1":
-        # Boltz1 expects separate files usually, but we take pae_path as the main entry
-        # Logic from original script:
-        # plddt file is pae_path replaced 'pae' -> 'plddt'
-        plddt_path = pae_path.replace("pae", "plddt")
-        if Path(plddt_path).exists():
+        # Load pLDDT if file exists
+        plddt_path = pae_path.with_name(pae_path.name.replace("pae", "plddt"))
+        if plddt_path.exists():
             data_plddt = np.load(plddt_path)
             # Boltz plddt is 0-1, convert to 0-100
             plddt_boltz = np.array(100.0 * data_plddt["plddt"])
+
             # Filter by token mask
-            mask_bool = token_array.astype(bool)
-            # Ensure dimensions match
-            if len(plddt_boltz) == len(mask_bool):
-                plddt = plddt_boltz[mask_bool]
-                cb_plddt = plddt_boltz[mask_bool]
-            else:
-                # Fallback if mask doesn't match (e.g. different tokenization)
-                # Try to take first N
-                plddt = plddt_boltz[:numres]
-                cb_plddt = plddt_boltz[:numres]
+            plddt = plddt_boltz[np.ix_(mask_bool)]
+            cb_plddt = plddt_boltz[np.ix_(mask_bool)]
+        else:
+            logger.warning(f"Boltz1 pLDDT file not found: {plddt_path}")
+            ntokens = np.sum(token_array)
+            plddt = np.zeros(ntokens)
+            cb_plddt = np.zeros(ntokens)
 
-        if Path(pae_path).exists():
-            data_pae = np.load(pae_path)
-            pae_full = np.array(data_pae["pae"])
-            mask_bool = token_array.astype(bool)
-            if pae_full.shape[0] == len(mask_bool):
-                pae_matrix = pae_full[np.ix_(mask_bool, mask_bool)]
-            else:
-                pae_matrix = pae_full[:numres, :numres]
+        # Load PAE matrix
+        data_pae = np.load(pae_path)
+        pae_full = np.array(data_pae["pae"])
+        pae_matrix = pae_full[np.ix_(mask_bool, mask_bool)]
 
-        summary_path = pae_path.replace("pae", "confidence").replace(".npz", ".json")
-        if Path(summary_path).exists():
-            with Path(summary_path).open() as f:
+        # Load ipTM scores if summary file exists
+        summary_path = pae_path.with_name(
+            pae_path.name.replace("pae", "confidence")
+        ).with_suffix(".json")
+        if summary_path.exists():
+            with summary_path.open() as f:
                 data_summary = json.load(f)
                 if "pair_chains_iptm" in data_summary:
                     boltz_iptm = data_summary["pair_chains_iptm"]
@@ -639,41 +682,46 @@ def load_pae_data(
                             if c1 == c2:
                                 continue
                             # Keys in json are strings of indices
-                            if str(i) in boltz_iptm and str(j) in boltz_iptm[str(i)]:
-                                iptm_dict[c1][c2] = boltz_iptm[str(i)][str(j)]
+                            iptm_dict[c1][c2] = boltz_iptm[str(i)][str(j)]
+        else:
+            logger.warning(f"Boltz1 confidence summary file not found: {summary_path}")
 
     elif model_type == "af3":
-        with Path(pae_path).open() as f:
+        with pae_path.open() as f:
             data = json.load(f)
 
         atom_plddts = np.array(data["atom_plddts"])
-        # Need to map atoms to residues.
-        # Original script uses CA_atom_num and CB_atom_num derived from structure
-        # We need to reconstruct those indices relative to the full atom list in JSON?
-        # Actually AF3 JSON has one plddt per atom.
-        # We need the atom indices from the structure file.
 
-        # Re-derive atom indices from structure data
+        # Derive atom indices from structure data
+        # Cbeta plDDTs are needed for pDockQ
         ca_indices = [r.atom_num - 1 for r in structure_data.residues]
         cb_indices = [r.atom_num - 1 for r in structure_data.cb_residues]
 
         plddt = atom_plddts[ca_indices]
         cb_plddt = atom_plddts[cb_indices]
 
+        # Get pairwise residue PAE matrix by identifying one token per protein residue.
+        # Modified residues have separate tokens for each atom, so need to pull out Calpha atom as token
         if "pae" in data:
             pae_full = np.array(data["pae"])
-            mask_bool = token_array.astype(bool)
             pae_matrix = pae_full[np.ix_(mask_bool, mask_bool)]
+        else:
+            raise ValueError(f"PAE matrix not found in AF3 PAE file: {pae_path}")
 
-        # Summary confidences
+        # Get iptm matrix from AF3 summary_confidences file
         summary_path = None
-        if "confidences" in pae_path:
-            summary_path = pae_path.replace("confidences", "summary_confidences")
-        elif "full_data" in pae_path:
-            summary_path = pae_path.replace("full_data", "summary_confidences")
+        pae_filename = pae_path.name
+        if "confidences" in pae_filename:  # AF3 local
+            summary_path = pae_path.with_name(
+                pae_filename.replace("confidences", "summary_confidences")
+            )
+        elif "full_data" in pae_filename:  # AF3 server
+            summary_path = pae_path.with_name(
+                pae_filename.replace("full_data", "summary_confidences")
+            )
 
-        if summary_path and Path(summary_path).exists():
-            with Path(summary_path).open() as f:
+        if summary_path and summary_path.exists():
+            with summary_path.open() as f:
                 data_summary = json.load(f)
             if "chain_pair_iptm" in data_summary:
                 af3_iptm = data_summary["chain_pair_iptm"]
@@ -682,6 +730,8 @@ def load_pae_data(
                         if c1 == c2:
                             continue
                         iptm_dict[c1][c2] = af3_iptm[i][j]
+        else:
+            logger.warning("AF3 summary confidences file not found")
 
     return PAEData(
         pae_matrix=pae_matrix,
@@ -1220,7 +1270,8 @@ class CliArgs:
     structure_file: Path
     pae_cutoff: float
     dist_cutoff: float
-    output_dir: Path
+    model_type: str
+    output_dir: Path | None
 
 
 def parse_cli_args() -> CliArgs:
@@ -1240,30 +1291,23 @@ def parse_cli_args() -> CliArgs:
     parser.add_argument(
         "-o",
         "--output_dir",
-        help="Directory to save outputs. Defaults to structure file directory.",
+        help="Directory to save outputs. Prints results to stdout if not passed.",
     )
 
     input_args = parser.parse_args()
 
     # Normalize paths and prepare typed args
-    input_args.pae_file = Path(input_args.pae_file).expanduser().resolve()
-    input_args.structure_file = Path(input_args.structure_file).expanduser().resolve()
-    input_args.output_dir = (
+    pae_path = Path(input_args.pae_file).expanduser().resolve()
+    if not pae_path.exists():
+        raise FileNotFoundError(f"PAE file not found: {pae_path}")
+    struct_path = Path(input_args.structure_file).expanduser().resolve()
+    if not struct_path.exists():
+        raise FileNotFoundError(f"Structure file not found: {struct_path}")
+    out_dir = (
         Path(input_args.output_dir).expanduser().resolve()
         if input_args.output_dir is not None
-        else input_args.structure_file.parent
+        else None
     )
-    return CliArgs(**vars(input_args))
-
-
-def main() -> None:
-    """Entry point for the script.
-
-    Parses command line arguments, loads data, calculates scores, and writes outputs.
-    """
-    args = parse_cli_args()
-    pae_path = args.pae_file
-    struct_path = args.structure_file
 
     # Guess model type from file extensions
     model_type = "unknown"
@@ -1273,34 +1317,59 @@ def main() -> None:
         if pae_path.suffix == ".json":
             model_type = "af3"
         elif pae_path.suffix == ".npz":
-            model_type = "boltz1"
+            model_type = "boltz1"  # boltz2 is the same
 
     if model_type == "unknown":
         raise ValueError(
             f"Could not determine model type from inputs: {pae_path}, {struct_path}"
         )
 
-    logger.info(f"Detected model type: {model_type}")
+    return CliArgs(
+        pae_file=pae_path,
+        structure_file=struct_path,
+        pae_cutoff=input_args.pae_cutoff,
+        dist_cutoff=input_args.dist_cutoff,
+        model_type=model_type,
+        output_dir=out_dir,
+    )
+
+
+def main() -> None:
+    """Entry point for the script.
+
+    Parses command line arguments, loads data, calculates scores, and writes outputs.
+    """
+    args = parse_cli_args()
+    logger.debug(f"Parsed CLI args: {args}")
+    logger.info(f"Detected model type: {args.model_type}")
 
     # Load data
-    structure_data = load_structure(struct_path)
-    pae_data = load_pae_data(pae_path, structure_data, model_type)
-
-    # Prepare output prefix
-    pdb_stem = struct_path.stem
-
-    pae_str = str(int(args.pae_cutoff)).zfill(2)
-    dist_str = str(int(args.dist_cutoff)).zfill(2)
-
-    output_prefix = args.output_dir / f"{pdb_stem}_{pae_str}_{dist_str}"
-    args.output_dir.mkdir(parents=True, exist_ok=True)
+    structure_data = load_structure(args.structure_file)
+    pae_data = load_pae_data(args.pae_file, structure_data, args.model_type)
 
     # Calculate scores and dump to files
+    pdb_stem = args.structure_file.stem
     results = calculate_scores(
         structure_data, pae_data, args.pae_cutoff, args.dist_cutoff, pdb_stem
     )
-    write_outputs(results, output_prefix)
-    logger.info(f"Success! Outputs written to {output_prefix}{{.txt,_byres.txt,.pml}}")
+    if args.output_dir is not None:
+        args.output_dir.mkdir(parents=True, exist_ok=True)
+
+        pae_str = str(int(args.pae_cutoff)).zfill(2)
+        dist_str = str(int(args.dist_cutoff)).zfill(2)
+        output_prefix = args.output_dir / f"{pdb_stem}_{pae_str}_{dist_str}"
+        write_outputs(results, output_prefix)
+        logger.info(
+            f"Success! Outputs written to {output_prefix}{{.txt,_byres.txt,.pml}}"
+        )
+    else:
+        # Print summary to stdout
+        print("#" * 90 + "\n# Summary\n" + "#" * 90)
+        print("".join(results.summary_lines))
+        print("#" * 90 + "\n# Per-residue scores\n" + "#" * 90)
+        print("".join(results.by_res_data))
+        print("#" * 90 + "\n# PyMOL script\n" + "#" * 90)
+        print("".join(results.pymol_script))
 
 
 if __name__ == "__main__":
