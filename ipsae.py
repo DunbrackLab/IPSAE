@@ -160,14 +160,14 @@ class StructureData:
         numres: Total number of residues.
     """
 
-    residues: list[Residue]
-    cb_residues: list[Residue]
-    chains: np.ndarray
-    unique_chains: np.ndarray
-    token_mask: np.ndarray
-    residue_types: np.ndarray
-    coordinates: np.ndarray
-    distances: np.ndarray
+    residues: list[Residue]  # [n_res]
+    cb_residues: list[Residue]  # [n_res]
+    chains: np.ndarray  # [n_res,]
+    unique_chains: np.ndarray  # [n_chains,]
+    token_mask: np.ndarray  # [n_res,]
+    residue_types: np.ndarray  # [n_res,]
+    coordinates: np.ndarray  # [n_res, 3]
+    distances: np.ndarray  # [n_res, n_res]
     chain_pair_type: dict[str, dict[str, str]]
     numres: int
 
@@ -763,7 +763,6 @@ def calculate_pdockq(
 ):
     """Calculate pDockQ scores for all chain pairs."""
     pDockQ = init_chainpairdict_zeros(unique_chains, 0.0)
-    pDockQ_unique_residues = init_chainpairdict_set(unique_chains)
     for c1 in unique_chains:
         for c2 in unique_chains:
             if c1 == c2:
@@ -783,17 +782,18 @@ def calculate_pdockq(
             npairs = np.sum(valid_mask)
 
             if npairs > 0:
-                # Identify interface residues on c2
+                # Identify interface residues on c1 and c2
                 # Any column in valid_mask with at least one True
+                c1_interface_mask = valid_mask.any(axis=1)
+                c1_interface_indices = c1_indices[c1_interface_mask]
                 c2_interface_mask = valid_mask.any(axis=0)
                 c2_interface_indices = c2_indices[c2_interface_mask]
 
-                for idx in c2_interface_indices:
-                    pDockQ_unique_residues[c1][c2].add(idx)
-
-                mean_plddt = cb_plddt[c2_interface_indices].mean()
-                x = mean_plddt * math.log10(npairs)
-                pDockQ[c1][c2] = 0.724 / (1 + math.exp(-0.052 * (x - 152.611))) + 0.018
+                mean_plddt = cb_plddt[
+                    np.hstack([c1_interface_indices, c2_interface_indices])
+                ].mean()
+                x = mean_plddt * np.log10(npairs)
+                pDockQ[c1][c2] = 0.724 / (1 + np.exp(-0.052 * (x - 152.611))) + 0.018
             else:
                 pDockQ[c1][c2] = 0.0
 
@@ -832,10 +832,14 @@ def calculate_pdockq2(
                 pae_ptm_sum = ptm_func_vec(pae_valid, 10.0).sum()
 
                 # Interface residues on c2 (already computed in pDockQ loop ideally, but recomputing is safe)
+                c1_interface_mask = valid_mask.any(axis=1)
+                c1_interface_indices = c1_indices[c1_interface_mask]
                 c2_interface_mask = valid_mask.any(axis=0)
                 c2_interface_indices = c2_indices[c2_interface_mask]
 
-                mean_plddt = cb_plddt[c2_interface_indices].mean()
+                mean_plddt = cb_plddt[
+                    np.hstack([c1_interface_indices, c2_interface_indices])
+                ].mean()
                 mean_ptm = pae_ptm_sum / npairs
                 x = mean_plddt * mean_ptm
                 pDockQ2[c1][c2] = 1.31 / (1 + math.exp(-0.075 * (x - 84.733))) + 0.005
@@ -1403,6 +1407,13 @@ def main() -> None:
 
     # Load data
     structure_data = load_structure(args.structure_file)
+    # for k, v in structure_data.__dict__.items():
+    #     if isinstance(v, np.ndarray):
+    #         logger.info(f"StructureData.{k}: array shape {v.shape}")
+    #     elif isinstance(v, list):
+    #         logger.info(f"StructureData.{k}: list length {len(v)}")
+    #     else:
+    #         logger.info(f"StructureData.{k}: {v}")
     pae_data = load_pae_data(args.pae_file, structure_data, args.model_type)
 
     # Calculate scores and dump to files
