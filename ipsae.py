@@ -42,12 +42,14 @@ All output files will be in same path/folder as cif or pdb file
 # ruff: noqa: C901, PLR0912, PLR0915
 import argparse
 import json
+import logging
 import math
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 # Constants
 LIS_PAE_CUTOFF = 12
@@ -113,32 +115,6 @@ CHAIN_COLOR = {
     "Y": "limon",
     "Z": "chocolate",
 }
-
-
-@dataclass
-class Atom:
-    """Represents an atom parsed from a PDB or mmCIF file.
-
-    Attributes:
-    ----------
-        atom_num: Atom serial number.
-        atom_name: Atom name (e.g., "CA", "CB").
-        residue_name: Residue name (e.g., "ALA", "GLY").
-        chain_id: Chain identifier.
-        residue_seq_num: Residue sequence number.
-        x: X coordinate.
-        y: Y coordinate.
-        z: Z coordinate.
-    """
-
-    atom_num: int
-    atom_name: str
-    residue_name: str
-    chain_id: str
-    residue_seq_num: int
-    x: float
-    y: float
-    z: float
 
 
 @dataclass
@@ -455,7 +431,7 @@ def classify_chains(chains: np.ndarray, residue_types: np.ndarray) -> dict[str, 
     return chain_types
 
 
-def load_structure(pdb_path: str) -> StructureData:
+def load_structure(pdb_path: Path) -> StructureData:
     """Parse a PDB or mmCIF file to extract structure data.
 
     Reads the file to identify residues, coordinates (CA and CB), and chains.
@@ -575,7 +551,7 @@ def load_structure(pdb_path: str) -> StructureData:
 
 
 def load_pae_data(
-    pae_path: str, structure_data: StructureData, model_type: str
+    pae_path: Path, structure_data: StructureData, model_type: str
 ) -> PAEData:
     """Load PAE and pLDDT data from various file formats.
 
@@ -1236,73 +1212,95 @@ def write_outputs(results: ScoreResults, output_prefix: str | Path) -> None:
         f.writelines(results.pymol_script)
 
 
-def main() -> None:
-    """Entry point for the script.
+@dataclass
+class CliArgs:
+    """Parsed command line arguments."""
 
-    Parses command line arguments, loads data, calculates scores, and writes outputs.
+    pae_file: Path
+    structure_file: Path
+    pae_cutoff: float
+    dist_cutoff: float
+    output_dir: Path
+
+
+def parse_cli_args() -> CliArgs:
+    """Parse command line arguments.
+
+    Returns:
+        A CliArgs object with the parsed arguments.
     """
+    # Parse arguments
     parser = argparse.ArgumentParser(
-        description="Calculate ipSAE and other scores for protein structures."
+        description="Calculate ipSAE, pDockQ, pDockQ2, and LIS scores for protein structure models."
     )
     parser.add_argument("pae_file", help="Path to PAE file (json, npz, pkl)")
     parser.add_argument("structure_file", help="Path to structure file (pdb, cif)")
     parser.add_argument("pae_cutoff", type=float, help="PAE cutoff")
     parser.add_argument("dist_cutoff", type=float, help="Distance cutoff")
     parser.add_argument(
+        "-o",
         "--output_dir",
         help="Directory to save outputs. Defaults to structure file directory.",
     )
 
-    args = parser.parse_args()
+    input_args = parser.parse_args()
 
+    # Normalize paths and prepare typed args
+    input_args.pae_file = Path(input_args.pae_file).expanduser().resolve()
+    input_args.structure_file = Path(input_args.structure_file).expanduser().resolve()
+    input_args.output_dir = (
+        Path(input_args.output_dir).expanduser().resolve()
+        if input_args.output_dir is not None
+        else input_args.structure_file.parent
+    )
+    return CliArgs(**vars(input_args))
+
+
+def main() -> None:
+    """Entry point for the script.
+
+    Parses command line arguments, loads data, calculates scores, and writes outputs.
+    """
+    args = parse_cli_args()
     pae_path = args.pae_file
-    pdb_path = args.structure_file
+    struct_path = args.structure_file
 
-    # Determine model type
+    # Guess model type from file extensions
     model_type = "unknown"
-    if ".pdb" in pdb_path:
+    if struct_path.suffix == ".pdb":
         model_type = "af2"
-    elif ".cif" in pdb_path:
-        if pae_path.endswith(".json"):
+    elif struct_path.suffix == ".cif":
+        if pae_path.suffix == ".json":
             model_type = "af3"
-        elif pae_path.endswith(".npz"):
+        elif pae_path.suffix == ".npz":
             model_type = "boltz1"
 
     if model_type == "unknown":
-        print(f"Could not determine model type from inputs: {pae_path}, {pdb_path}")
-        sys.exit(1)
+        raise ValueError(
+            f"Could not determine model type from inputs: {pae_path}, {struct_path}"
+        )
 
-    print(f"Detected model type: {model_type}")
+    logger.info(f"Detected model type: {model_type}")
 
     # Load data
-    structure_data = load_structure(pdb_path)
+    structure_data = load_structure(struct_path)
     pae_data = load_pae_data(pae_path, structure_data, model_type)
 
     # Prepare output prefix
-    pdb_stem = Path(pdb_path).stem
-    if pdb_path.endswith(".pdb"):
-        pdb_stem = pdb_stem.replace(".pdb", "")
-    if pdb_path.endswith(".cif"):
-        pdb_stem = pdb_stem.replace(".cif", "")
+    pdb_stem = struct_path.stem
 
     pae_str = str(int(args.pae_cutoff)).zfill(2)
     dist_str = str(int(args.dist_cutoff)).zfill(2)
 
-    output_dir = Path(args.output_dir) if args.output_dir else Path(pdb_path).parent
-    output_prefix = output_dir / f"{pdb_stem}_{pae_str}_{dist_str}"
+    output_prefix = args.output_dir / f"{pdb_stem}_{pae_str}_{dist_str}"
+    args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Calculate
+    # Calculate scores and dump to files
     results = calculate_scores(
-        structure_data,
-        pae_data,
-        args.pae_cutoff,
-        args.dist_cutoff,
-        pdb_stem,
+        structure_data, pae_data, args.pae_cutoff, args.dist_cutoff, pdb_stem
     )
-
-    # Write
     write_outputs(results, output_prefix)
-    print(f"Outputs written to {output_prefix}{{.txt,_byres.txt,.pml}}")
+    logger.info(f"Success! Outputs written to {output_prefix}{{.txt,_byres.txt,.pml}}")
 
 
 if __name__ == "__main__":
