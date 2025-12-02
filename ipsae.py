@@ -6,6 +6,8 @@ Changes:
 
 - Included chain index fix from https://github.com/DunbrackLab/IPSAE/pull/19
 - Refactored the script into functions for better modularity.
+- Vectorized calculations where possible for performance improvements.
+- Supported specifying model type from command line arguments.
 
 Original Script Description
 =============================
@@ -688,6 +690,7 @@ def load_pae_data(
                 if "pair_chains_iptm" in data_summary:
                     boltz_iptm = data_summary["pair_chains_iptm"]
                     # Map indices to chains
+                    # TODO: is this the right order?
                     for i, c1 in enumerate(unique_chains):
                         for j, c2 in enumerate(unique_chains):
                             if c1 == c2:
@@ -1317,8 +1320,14 @@ def parse_cli_args() -> CliArgs:
     parser.add_argument("dist_cutoff", type=float, help="Distance cutoff")
     parser.add_argument(
         "-o",
-        "--output_dir",
+        "--output-dir",
         help="Directory to save outputs. Prints results to stdout if not passed.",
+    )
+    parser.add_argument(
+        "-t",
+        "--model-type",
+        help="Model type: af2, af3, boltz1, boltz2 (auto-detected if not provided).",
+        default="unknown",
     )
 
     input_args = parser.parse_args()
@@ -1337,19 +1346,26 @@ def parse_cli_args() -> CliArgs:
     )
 
     # Guess model type from file extensions
-    model_type = "unknown"
-    if struct_path.suffix == ".pdb":
-        model_type = "af2"
-    elif struct_path.suffix == ".cif":
-        if pae_path.suffix == ".json":
-            model_type = "af3"
-        elif pae_path.suffix == ".npz":
-            model_type = "boltz1"  # boltz2 is the same
+    if input_args.model_type != "unknown":
+        model_type = input_args.model_type.lower()
+        if model_type == "boltz2":
+            model_type = "boltz1"  # treat boltz2 same as boltz1
+        if model_type not in {"af2", "af3", "boltz1"}:
+            raise ValueError(f"Invalid model type specified: {model_type}")
+    else:
+        model_type = "unknown"
+        if struct_path.suffix == ".pdb":
+            model_type = "af2"
+        elif struct_path.suffix == ".cif":
+            if pae_path.suffix == ".json":
+                model_type = "af3"
+            elif pae_path.suffix == ".npz":
+                model_type = "boltz1"  # boltz2 is the same
 
-    if model_type == "unknown":
-        raise ValueError(
-            f"Could not determine model type from inputs: {pae_path}, {struct_path}"
-        )
+        if model_type == "unknown":
+            raise ValueError(
+                f"Could not determine model type from inputs: {pae_path}, {struct_path}"
+            )
 
     return CliArgs(
         pae_file=pae_path,
@@ -1372,13 +1388,6 @@ def main() -> None:
 
     # Load data
     structure_data = load_structure(args.structure_file)
-    # for k, v in structure_data.__dict__.items():
-    #     if isinstance(v, np.ndarray):
-    #         logger.info(f"StructureData.{k}: array shape {v.shape}")
-    #     elif isinstance(v, list):
-    #         logger.info(f"StructureData.{k}: list length {len(v)}")
-    #     else:
-    #         logger.info(f"StructureData.{k}: {v}")
     pae_data = load_pae_data(args.pae_file, structure_data, args.model_type)
 
     # Calculate scores and dump to files
