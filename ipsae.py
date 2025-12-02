@@ -197,6 +197,79 @@ class PAEData:
 
 
 @dataclass
+class PerResScoreResults:
+    """Container for per-residue score results.
+
+    Attributes:
+        i: residue in model (from 1 to total number of residues in model)
+        AlignChn: chainid of aligned residue (in PAE calculation)
+        ScoredChn: chainid of scored residues (with PAE less than cutoff)
+        AlignResNum: residue number of aligned residue
+        AlignResType: residue type of aligned residue (three letter code)
+        AlignRespLDDT: plDDT of aligned residue
+        n0chn: number of residues in d0 in ipSAE_d0chn calculation
+        n0dom: number of residues in d0 in ipSAE_d0dom calculation
+        n0res: number of residues for d0 in ipSAE calculation
+        d0chn: d0 for ipSAE_d0chn
+        d0dom: d0 for ipSAE_d0dom
+        d0res: d0 for ipSAE
+        pTM_pae: ipTM calculated from PAE matrix and d0 = sum of chain lengths
+        pSAE_d0chn: residue-specific ipSAE calculated with PAE cutoff and d0 = sum of chain lengths (n0chn)
+        pSAE_d0dom: residue-specific ipSAE calculated with PAE cutoff and d0 = total number of residues in both chains with any interchain PAE<cutoff (n0dom)
+        pSAE: residue-specific ipSAE value for given PAE cutoff and d0 determined by number of residues in 2nd chain with PAE<cutoff (n0res)
+    """
+
+    i: int
+    AlignChn: str
+    ScoredChn: str
+    AlignResNum: int
+    AlignResType: str
+    AlignRespLDDT: float
+    n0chn: int
+    n0dom: int
+    n0res: int
+    d0chn: float
+    d0dom: float
+    d0res: float
+    pTM_pae: float
+    pSAE_d0chn: float
+    pSAE_d0dom: float
+    pSAE: float
+
+    def to_formatted_line(self) -> str:
+        """Format the per-residue score results as a fixed-width string."""
+        c1, c2 = self.AlignChn, self.ScoredChn
+        return (
+            f"{self.i:<4d}    "
+            f"{c1:4}      "
+            f"{c2:4}      "
+            f"{self.AlignResNum:4d}           "
+            f"{self.AlignResType:3}        "
+            f"{self.AlignRespLDDT:8.2f}         "
+            f"{self.n0chn:5d}  "
+            f"{self.n0dom:5d}  "
+            f"{self.n0res:5d}  "
+            f"{self.d0chn:8.3f}  "
+            f"{self.d0dom:8.3f}  "
+            f"{self.d0res:8.3f}   "
+            f"{self.pTM_pae:8.4f}    "
+            f"{self.pSAE_d0chn:8.4f}    "
+            f"{self.pSAE_d0dom:8.4f}    "
+            f"{self.pSAE:8.4f}\n"
+        )
+
+    @staticmethod
+    def header_line() -> str:
+        """Return the header line for the per-residue score output."""
+        return "i   AlignChn ScoredChain  AlignResNum  AlignResType  AlignRespLDDT      n0chn  n0dom  n0res    d0chn     d0dom     d0res   ipTM_pae  ipSAE_d0chn ipSAE_d0dom    ipSAE \n"
+
+    @staticmethod
+    def csv_header_line() -> str:
+        """Return the CSV header line for the per-residue score output."""
+        return "i,AlignChn,ScoredChain,AlignResNum,AlignResType,AlignRespLDDT,n0chn,n0dom,n0res,d0chn,d0dom,d0res,ipTM_pae,ipSAE_d0chn,ipSAE_d0dom,ipSAE\n"
+
+
+@dataclass
 class ScoreResults:
     """Container for calculated scores and output data.
 
@@ -219,7 +292,7 @@ class ScoreResults:
     pdockq2_scores: dict
     lis_scores: dict
     metrics: dict
-    by_res_data: list[str]  # Storing the formatted lines for the by-res output file
+    by_res_data: list[PerResScoreResults]
     summary_lines: list[str]  # Storing the formatted lines for the summary output file
     pymol_script: list[str]
 
@@ -996,10 +1069,7 @@ def calculate_scores(
             dist_unique_residues_chain2[c1][c2].update(c2_dist_contrib_residues)
 
     # Second pass: d0dom and d0res
-    by_res_lines = []
-    by_res_lines.append(
-        "i   AlignChn ScoredChain  AlignResNum  AlignResType  AlignRespLDDT      n0chn  n0dom  n0res    d0chn     d0dom     d0res   ipTM_pae  ipSAE_d0chn ipSAE_d0dom    ipSAE \n"
-    )
+    by_res_lines: list[PerResScoreResults] = []
     for c1 in unique_chains:
         for c2 in unique_chains:
             if c1 == c2:
@@ -1031,25 +1101,26 @@ def calculate_scores(
 
             # Output line generation
             for i in c1_indices:
-                line = (
-                    f"{i + 1:<4d}    "
-                    f"{c1:4}      "
-                    f"{c2:4}      "
-                    f"{residues[i].resnum:4d}           "
-                    f"{residues[i].res:3}        "
-                    f"{plddt[i]:8.2f}         "
-                    f"{int(n0chn[c1][c2]):5d}  "
-                    f"{int(n0dom[c1][c2]):5d}  "
-                    f"{int(n0res_byres[c1][c2][i]):5d}  "
-                    f"{d0chn[c1][c2]:8.3f}  "
-                    f"{d0dom[c1][c2]:8.3f}  "
-                    f"{d0res_byres[c1][c2][i]:8.3f}   "
-                    f"{iptm_d0chn_byres[c1][c2][i]:8.4f}    "
-                    f"{ipsae_d0chn_byres[c1][c2][i]:8.4f}    "
-                    f"{ipsae_d0dom_byres[c1][c2][i]:8.4f}    "
-                    f"{ipsae_d0res_byres[c1][c2][i]:8.4f}\n"
+                by_res_lines.append(
+                    PerResScoreResults(
+                        i=i + 1,
+                        AlignChn=c1,
+                        ScoredChn=c2,
+                        AlignResNum=residues[i].resnum,
+                        AlignResType=residues[i].res,
+                        AlignRespLDDT=plddt[i],
+                        n0chn=int(n0chn[c1][c2]),
+                        n0dom=int(n0dom[c1][c2]),
+                        n0res=int(n0res_byres[c1][c2][i]),
+                        d0chn=d0chn[c1][c2],
+                        d0dom=d0dom[c1][c2],
+                        d0res=d0res_byres[c1][c2][i],
+                        pTM_pae=iptm_d0chn_byres[c1][c2][i],
+                        pSAE_d0chn=ipsae_d0chn_byres[c1][c2][i],
+                        pSAE_d0dom=ipsae_d0dom_byres[c1][c2][i],
+                        pSAE=ipsae_d0res_byres[c1][c2][i],
+                    )
                 )
-                by_res_lines.append(line)
 
     # Aggregate results (Asym and Max)
     # We need to store these to generate the summary table
@@ -1286,7 +1357,9 @@ def write_outputs(results: ScoreResults, output_prefix: str | Path) -> None:
         f.writelines(results.summary_lines)
 
     with Path(f"{output_prefix}_byres.txt").open("w") as f:
-        f.writelines(results.by_res_data)
+        f.write(results.by_res_data[0].header_line())
+        for res_line in results.by_res_data:
+            f.write(res_line.to_formatted_line())
 
     with Path(f"{output_prefix}.pml").open("w") as f:
         f.writelines(results.pymol_script)
@@ -1410,7 +1483,8 @@ def main() -> None:
         print("#" * 90 + "\n# Summary\n" + "#" * 90)
         print("".join(results.summary_lines))
         print("#" * 90 + "\n# Per-residue scores\n" + "#" * 90)
-        print("".join(results.by_res_data))
+        print(results.by_res_data[0].header_line())
+        print("".join(x.to_formatted_line() for x in results.by_res_data))
         print("#" * 90 + "\n# PyMOL script\n" + "#" * 90)
         print("".join(results.pymol_script))
 
