@@ -1033,7 +1033,14 @@ def aggregate_byres_scores(
     d0dom: dict[str, dict[str, float]],
     pdb_stem: str,
 ) -> tuple[list[SummaryResult], list[str], dict[str, dict[str, float]]]:
-    """Aggregate per-residue scores into chain-pair-specific scores."""
+    """Aggregate per-residue scores into chain-pair-specific scores.
+
+    Returns:
+        A tuple containing:
+        - List of SummaryResult objects with chain-pair scores.
+        - List of PyMOL script lines.
+        - Dictionary of metrics for each chain pair.
+    """
     # Store results in a structured way
     results_metrics: dict[str, dict[str, float]] = {}
 
