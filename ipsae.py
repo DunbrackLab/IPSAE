@@ -899,11 +899,11 @@ def calculate_scores(
     LIS = calculate_lis(chains, unique_chains, pae_matrix)
 
     # --- ipTM / ipSAE ---
-    # Initialize containers
     residues = structure.residues
     plddt = pae_data.plddt
     numres = structure.numres
 
+    # Initialize containers
     iptm_d0chn_byres = init_chainpairdict_npzeros(unique_chains, numres)
     ipsae_d0chn_byres = init_chainpairdict_npzeros(unique_chains, numres)
     ipsae_d0dom_byres = init_chainpairdict_npzeros(unique_chains, numres)
@@ -916,6 +916,11 @@ def calculate_scores(
     n0res_byres = init_chainpairdict_npzeros(unique_chains, numres)
     d0res_byres = init_chainpairdict_npzeros(unique_chains, numres)
 
+    n0res_max = init_chainpairdict_zeros(unique_chains, 0)
+    n0dom_max = init_chainpairdict_zeros(unique_chains, 0)
+    d0res_max = init_chainpairdict_zeros(unique_chains, 0.0)
+    d0dom_max = init_chainpairdict_zeros(unique_chains, 0.0)
+
     unique_residues_chain1 = init_chainpairdict_set(unique_chains)
     unique_residues_chain2 = init_chainpairdict_set(unique_chains)
     dist_unique_residues_chain1 = init_chainpairdict_set(unique_chains)
@@ -925,6 +930,7 @@ def calculate_scores(
     dist_valid_pair_counts = init_chainpairdict_zeros(unique_chains, 0)
 
     # First pass: d0chn
+    # Calculate ipTM/ipSAE with and without PAE cutoff
     for c1 in unique_chains:
         for c2 in unique_chains:
             if c1 == c2:
@@ -937,52 +943,60 @@ def calculate_scores(
             d0chn[c1][c2] = calc_d0(n0chn[c1][c2], structure.chain_pair_type[c1][c2])
 
             # Precompute PTM matrix for this d0
-            # We only need the submatrix [c1_indices, c2_indices] really, but original code does full row
-            # TODO Optimization: only compute for c1 rows
+            ptm_matrix_d0chn = ptm_func_vec(
+                pae_matrix[np.ix_(c1_indices, c2_indices)], d0chn[c1][c2]
+            )
 
-            for i in c1_indices:
-                # Row i, columns in c2
-                pae_row = pae_matrix[i, c2_indices]
-                dists_row = distances[i, c2_indices]
+            # ipTM uses all of chain 2, ipSAE uses PAE cutoff
+            iptm_d0chn_byres[c1][c2][c1_indices] = ptm_matrix_d0chn.mean(axis=1)
 
-                # iptm (no cutoff)
-                ptm_vals = ptm_func_vec(pae_row, d0chn[c1][c2])
-                iptm_d0chn_byres[c1][c2][i] = (
-                    ptm_vals.mean() if len(ptm_vals) > 0 else 0.0
-                )
+            valid_pairs_mask = pae_matrix[np.ix_(c1_indices, c2_indices)] < pae_cutoff
+            ipsae_d0chn_byres[c1][c2][c1_indices] = np.ma.masked_where(
+                ~valid_pairs_mask, ptm_matrix_d0chn
+            ).mean(axis=1)
 
-                # ipsae (pae cutoff)
-                valid_mask = pae_row < pae_cutoff
-                valid_ptm = ptm_vals[valid_mask]
-                ipsae_d0chn_byres[c1][c2][i] = (
-                    valid_ptm.mean() if len(valid_ptm) > 0 else 0.0
-                )
+            # n0res and d0res by residue
+            n0res_byres[c1][c2][c1_indices] = valid_pairs_mask.sum(axis=1)
+            d0res_byres[c1][c2][c1_indices] = calc_d0_array(
+                n0res_byres[c1][c2][c1_indices], structure.chain_pair_type[c1][c2]
+            )
 
-                # Track residues
-                valid_pair_counts[c1][c2] += np.sum(valid_mask)
-                if valid_mask.any():
-                    unique_residues_chain1[c1][c2].add(residues[i].resnum)
-                    for j_local in np.where(valid_mask)[0]:
-                        j_global = c2_indices[j_local]
-                        unique_residues_chain2[c1][c2].add(residues[j_global].resnum)
+            # Track unique residues contributing to the ipSAE for c1,2
+            valid_pair_counts[c1][c2] = np.sum(valid_pairs_mask)
+            c1_contrib_residues = set(
+                residues[c1_indices[i]].resnum
+                for i in np.where(valid_pairs_mask.any(axis=1))[0]
+            )
+            unique_residues_chain1[c1][c2].update(c1_contrib_residues)
 
-                # Dist cutoff tracking
-                dist_valid_mask = (pae_row < pae_cutoff) & (dists_row < dist_cutoff)
-                dist_valid_pair_counts[c1][c2] += np.sum(dist_valid_mask)
-                if dist_valid_mask.any():
-                    dist_unique_residues_chain1[c1][c2].add(residues[i].resnum)
-                    for j_local in np.where(dist_valid_mask)[0]:
-                        j_global = c2_indices[j_local]
-                        dist_unique_residues_chain2[c1][c2].add(
-                            residues[j_global].resnum
-                        )
+            c2_contrib_residues = set(
+                residues[c2_indices[j]].resnum
+                for j in np.where(valid_pairs_mask.any(axis=0))[0]
+            )
+            unique_residues_chain2[c1][c2].update(c2_contrib_residues)
+
+            # Track unique residues contributing to ipTM in interface
+            c2_valid_dist_mask = (valid_pairs_mask) & (
+                distances[np.ix_(c1_indices, c2_indices)] < dist_cutoff
+            )
+            dist_valid_pair_counts[c1][c2] = np.sum(c2_valid_dist_mask)
+            c1_dist_contrib_residues = set(
+                residues[c1_indices[i]].resnum
+                for i in np.where(c2_valid_dist_mask.any(axis=1))[0]
+            )
+            dist_unique_residues_chain1[c1][c2].update(c1_dist_contrib_residues)
+
+            c2_dist_contrib_residues = set(
+                residues[c2_indices[j]].resnum
+                for j in np.where(c2_valid_dist_mask.any(axis=0))[0]
+            )
+            dist_unique_residues_chain2[c1][c2].update(c2_dist_contrib_residues)
 
     # Second pass: d0dom and d0res
     by_res_lines = []
     by_res_lines.append(
         "i   AlignChn ScoredChain  AlignResNum  AlignResType  AlignRespLDDT      n0chn  n0dom  n0res    d0chn     d0dom     d0res   ipTM_pae  ipSAE_d0chn ipSAE_d0dom    ipSAE \n"
     )
-
     for c1 in unique_chains:
         for c2 in unique_chains:
             if c1 == c2:
@@ -996,38 +1010,24 @@ def calculate_scores(
             )
             d0dom[c1][c2] = calc_d0(n0dom[c1][c2], structure.chain_pair_type[c1][c2])
 
-            # Precompute n0res for all i in c1
-            # n0res[i] = count of residues in c2 with pae < cutoff
-            pae_sub = pae_matrix[np.ix_(c1_indices, c2_indices)]
-            valid_mask_sub = pae_sub < pae_cutoff
-            n0res_local = np.sum(valid_mask_sub, axis=1)
-
-            # Map back to global array
-            n0res_byres[c1][c2][c1_indices] = n0res_local
-            d0res_byres[c1][c2][c1_indices] = calc_d0_array(
-                n0res_local, structure.chain_pair_type[c1][c2]
+            valid_pairs_mask = pae_matrix[np.ix_(c1_indices, c2_indices)] < pae_cutoff
+            ptm_matrix_d0dom = ptm_func_vec(
+                pae_matrix[np.ix_(c1_indices, c2_indices)], d0dom[c1][c2]
             )
+            ipsae_d0dom_byres[c1][c2][c1_indices] = np.ma.masked_where(
+                ~valid_pairs_mask, ptm_matrix_d0dom
+            ).mean(axis=1)
 
-            for _, i in enumerate(c1_indices):
-                pae_row = pae_matrix[i, c2_indices]
-                valid_mask = pae_row < pae_cutoff
+            ptm_matrix_d0res = ptm_func_vec(
+                pae_matrix[np.ix_(c1_indices, c2_indices)],
+                d0res_byres[c1][c2][c1_indices][:, np.newaxis],
+            )
+            ipsae_d0res_byres[c1][c2][c1_indices] = np.ma.masked_where(
+                ~valid_pairs_mask, ptm_matrix_d0res
+            ).mean(axis=1)
 
-                # d0dom calculation
-                ptm_vals_dom = ptm_func_vec(pae_row, d0dom[c1][c2])
-                valid_ptm_dom = ptm_vals_dom[valid_mask]
-                ipsae_d0dom_byres[c1][c2][i] = (
-                    valid_ptm_dom.mean() if len(valid_ptm_dom) > 0 else 0.0
-                )
-
-                # d0res calculation
-                d0_r = d0res_byres[c1][c2][i]
-                ptm_vals_res = ptm_func_vec(pae_row, d0_r)
-                valid_ptm_res = ptm_vals_res[valid_mask]
-                ipsae_d0res_byres[c1][c2][i] = (
-                    valid_ptm_res.mean() if len(valid_ptm_res) > 0 else 0.0
-                )
-
-                # Output line generation
+            # Output line generation
+            for i in c1_indices:
                 line = (
                     f"{i + 1:<4d}    "
                     f"{c1:4}      "
@@ -1051,14 +1051,6 @@ def calculate_scores(
     # Aggregate results (Asym and Max)
     # We need to store these to generate the summary table
 
-    # Helper to get max info
-    def get_max_info(values_array, c1, c2):
-        vals = values_array[c1][c2]
-        if np.all(vals == 0):
-            return 0.0, "None", 0, 0.0
-        idx = np.argmax(vals)
-        return vals[idx], residues[idx].residue_str, idx, vals[idx]
-
     # Store results in a structured way
     results_metrics = {}
 
@@ -1072,6 +1064,16 @@ def calculate_scores(
         "# Chn1 Chn2  PAE Dist  Type   ipSAE    ipSAE_d0chn ipSAE_d0dom  ipTM_af  ipTM_d0chn     pDockQ     pDockQ2    LIS      n0res  n0chn  n0dom   d0res   d0chn   d0dom  nres1   nres2   dist1   dist2  Model\n"
     )
 
+    # Helper to get max info
+    def get_max_info(values_array, c1, c2):
+        vals = values_array[c1][c2]
+        if np.all(vals == 0):
+            return 0.0, "None", 0, 0.0
+        idx = np.argmax(vals)
+        return vals[idx], residues[idx].residue_str, idx, vals[idx]
+
+    pae_str = str(int(pae_cutoff)).zfill(2)
+    dist_str = str(int(dist_cutoff)).zfill(2)
     chainpairs = set()
     for c1 in unique_chains:
         for c2 in unique_chains:
@@ -1079,9 +1081,7 @@ def calculate_scores(
                 continue
             chainpairs.add(f"{c1}-{c2}")
 
-    pae_str = str(int(pae_cutoff)).zfill(2)
-    dist_str = str(int(dist_cutoff)).zfill(2)
-
+    # interchain ipTM and ipSAE for each chain pair
     for pair in sorted(chainpairs):
         c_a, c_b = pair.split("-")
 
