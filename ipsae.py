@@ -270,7 +270,7 @@ class PerResScoreResults:
 
 
 @dataclass
-class SummaryResult:
+class ChainPairScoreResults:
     """Container for chain-pair summary score results.
 
     Attributes:
@@ -375,8 +375,8 @@ class ScoreResults:
         pdockq2_scores: Dictionary of pDockQ2 scores (by chain pair).
         lis_scores: Dictionary of LIS scores (by chain pair).
         metrics: Dictionary of pDockQ, pDockQ2, and LIS scores for each chain pair.
-        by_res_data: Lists of per-residue scores.
-        summary_data: List of chain-pair summary score results.
+        by_res_scores: Lists of per-residue scores.
+        chain_pair_scores: List of chain-pair summary score results.
         pymol_script: List of formatted strings for PyMOL script.
     """
 
@@ -387,8 +387,10 @@ class ScoreResults:
     lis_scores: dict[str, dict[str, float]]  # {c1: {c2: score}}
     metrics: dict[str, dict[str, float]]  # {`<c1>_<c2>`: {metric_name: value}}
 
-    by_res_data: list[PerResScoreResults]
-    summary_data: list[SummaryResult]  # List of chain-pair summary score results
+    by_res_scores: list[PerResScoreResults]
+    chain_pair_scores: list[
+        ChainPairScoreResults
+    ]  # List of chain-pair summary score results
     pymol_script: list[str]
 
 
@@ -1032,19 +1034,19 @@ def aggregate_byres_scores(
     d0chn: dict[str, dict[str, float]],
     d0dom: dict[str, dict[str, float]],
     pdb_stem: str,
-) -> tuple[list[SummaryResult], list[str], dict[str, dict[str, float]]]:
+) -> tuple[list[ChainPairScoreResults], list[str], dict[str, dict[str, float]]]:
     """Aggregate per-residue scores into chain-pair-specific scores.
 
     Returns:
         A tuple containing:
-        - List of SummaryResult objects with chain-pair scores.
+        - List of ChainPairScoreResults objects with chain-pair scores.
         - List of PyMOL script lines.
         - Dictionary of metrics for each chain pair.
     """
     # Store results in a structured way
     results_metrics: dict[str, dict[str, float]] = {}
 
-    summary_data: list[SummaryResult] = []
+    chain_pair_scores: list[ChainPairScoreResults] = []
 
     pymol_lines = []
     pymol_lines.append(
@@ -1098,7 +1100,7 @@ def aggregate_byres_scores(
             if iptm_af == 0.0 and pae_data.iptm != -1.0:
                 iptm_af = pae_data.iptm  # Fallback to global if per-pair not found
 
-            summary_result = SummaryResult(
+            summary_result = ChainPairScoreResults(
                 Chn1=c1,
                 Chn2=c2,
                 PAE=pae_int,
@@ -1124,7 +1126,7 @@ def aggregate_byres_scores(
                 dist2=dist2_cnt,
                 Model=pdb_stem,
             )
-            summary_data.append(summary_result)
+            chain_pair_scores.append(summary_result)
             pymol_lines.append("# " + summary_result.to_formatted_line())
 
             # Store in results dict
@@ -1219,7 +1221,7 @@ def aggregate_byres_scores(
             len(dist_unique_residues_chain2[c2][c1]),
         )
 
-        summary_result = SummaryResult(
+        summary_result = ChainPairScoreResults(
             Chn1=c2,
             Chn2=c1,
             PAE=pae_int,
@@ -1245,10 +1247,10 @@ def aggregate_byres_scores(
             dist2=dist2_max,
             Model=pdb_stem,
         )
-        summary_data.append(summary_result)
+        chain_pair_scores.append(summary_result)
         pymol_lines.append("# " + summary_result.to_formatted_line())
 
-    return summary_data, pymol_lines, results_metrics
+    return chain_pair_scores, pymol_lines, results_metrics
 
 
 def calculate_scores(
@@ -1459,7 +1461,7 @@ def calculate_scores(
     # We need to store these to generate the summary table
 
     # Store results in a structured way
-    summary_data, pymol_lines, results_metrics = aggregate_byres_scores(
+    chain_pair_scores, pymol_lines, results_metrics = aggregate_byres_scores(
         residues,
         pae_cutoff,
         dist_cutoff,
@@ -1492,8 +1494,8 @@ def calculate_scores(
         pdockq2_scores=pDockQ2,
         lis_scores=LIS,
         metrics=results_metrics,
-        by_res_data=by_res_lines,
-        summary_data=summary_data,
+        by_res_scores=by_res_lines,
+        chain_pair_scores=chain_pair_scores,
         pymol_script=pymol_lines,
     )
 
@@ -1512,16 +1514,16 @@ def write_outputs(results: ScoreResults, output_prefix: str | Path) -> None:
     """
     with Path(f"{output_prefix}.txt").open("w") as f:
         f.write("\n")  # Leading newline
-        f.write(SummaryResult.header_line())
-        for summary in results.summary_data:
+        f.write(ChainPairScoreResults.header_line())
+        for summary in results.chain_pair_scores:
             f.write(summary.to_formatted_line())
             # Add newline after "max" line (end of each chain pair group)
             if summary.Type == "max":
                 f.write("\n")
 
     with Path(f"{output_prefix}_byres.txt").open("w") as f:
-        f.write(results.by_res_data[0].header_line())
-        for res_line in results.by_res_data:
+        f.write(results.by_res_scores[0].header_line())
+        for res_line in results.by_res_scores:
             f.write(res_line.to_formatted_line())
 
     with Path(f"{output_prefix}.pml").open("w") as f:
@@ -1647,14 +1649,14 @@ def main(
     else:
         # Print summary to stdout
         print("#" * 90 + "\n# Summary\n" + "#" * 90)
-        print("\n" + SummaryResult.header_line(), end="")
-        for summary in results.summary_data:
+        print("\n" + ChainPairScoreResults.header_line(), end="")
+        for summary in results.chain_pair_scores:
             print(summary.to_formatted_line(), end="")
             if summary.Type == "max":
                 print()
         print("#" * 90 + "\n# Per-residue scores\n" + "#" * 90)
-        print(results.by_res_data[0].header_line())
-        print("".join(x.to_formatted_line() for x in results.by_res_data))
+        print(results.by_res_scores[0].header_line())
+        print("".join(x.to_formatted_line() for x in results.by_res_scores))
         print("#" * 90 + "\n# PyMOL script\n" + "#" * 90)
         print("".join(results.pymol_script))
 
