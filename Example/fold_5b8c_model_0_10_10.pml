@@ -1,0 +1,22 @@
+# Chn1 Chn2  PAE Dist  Type   ipSAE    ipSAE_d0chn ipSAE_d0dom  ipTM_af  ipTM_d0chn     pDockQ     pDockQ2    LIS      n0res  n0chn  n0dom   d0res   d0chn   d0dom  nres1   nres2   dist1   dist2  Model
+# A    B     10   10   asym  0.607303    0.764036    0.745724    0.790    0.764036      0.3329     0.6616     0.5633     120    259    232    4.05    5.95    5.65    112     120      27      29   fold_5b8c_model_0
+alias color_A_B, color gray80, all; color magenta, chain  A and resi 3-28+32-117; color marine, chain  B and resi 1-120
+
+# B    A     10   10   asym  0.649895    0.791699    0.780552    0.790    0.693736      0.3329     0.7087     0.6121     120    259    240    4.05    5.95    5.74    119     121      29      27   fold_5b8c_model_0
+# A    B     10   10   max   0.649895    0.791699    0.780552    0.790    0.764036      0.3329     0.7087     0.5877     120    259    240    4.05    5.95    5.74    121     120      27      29   fold_5b8c_model_0
+alias color_B_A, color gray80, all; color marine, chain  B and resi 1-119; color magenta, chain  A and resi 1-121
+
+# A    C     10   10   asym  0.562999    0.741688    0.721982    0.770    0.741688      0.1062     0.4669     0.5278     111    250    224    3.88    5.85    5.56    113     111      16      18   fold_5b8c_model_0
+alias color_A_C, color gray80, all; color magenta, chain  A and resi 3-29+31-116; color lime, chain  C and resi 1-111
+
+# C    A     10   10   asym  0.625338    0.769687    0.756355    0.770    0.674137      0.1062     0.5017     0.5810     120    250    230    4.05    5.85    5.63    110     120      18      16   fold_5b8c_model_0
+# A    C     10   10   max   0.625338    0.769687    0.756355    0.770    0.741688      0.1062     0.5017     0.5544     120    250    230    4.05    5.85    5.63    120     111      16      18   fold_5b8c_model_0
+alias color_C_A, color gray80, all; color lime, chain  C and resi 1-110; color magenta, chain  A and resi 1-120
+
+# B    C     10   10   asym  0.818084    0.903331    0.902980    0.900    0.903331      0.5176     0.8846     0.7216     111    231    230    3.88    5.64    5.63    119     111      37      34   fold_5b8c_model_0
+alias color_B_C, color gray80, all; color marine, chain  B and resi 1-119; color lime, chain  C and resi 1-111
+
+# C    B     10   10   asym  0.835189    0.906605    0.906605    0.900    0.906605      0.5176     0.8905     0.7076     120    231    231    4.05    5.64    5.64    111     120      34      37   fold_5b8c_model_0
+# B    C     10   10   max   0.835189    0.906605    0.906605    0.900    0.906605      0.5176     0.8905     0.7146     120    231    231    4.05    5.64    5.64    120     111      37      34   fold_5b8c_model_0
+alias color_C_B, color gray80, all; color lime, chain  C and resi 1-111; color marine, chain  B and resi 1-120
+
