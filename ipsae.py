@@ -1066,11 +1066,12 @@ def calculate_scores(
 
     # Helper to get max info
     def get_max_info(values_array, c1, c2):
+        """Get max value and corresponding residue info from by-residue arrays."""
         vals = values_array[c1][c2]
         if np.all(vals == 0):
-            return 0.0, "None", 0, 0.0
+            return 0.0, "None", 0
         idx = np.argmax(vals)
-        return vals[idx], residues[idx].residue_str, idx, vals[idx]
+        return vals[idx], residues[idx].residue_str, idx
 
     pae_str = str(int(pae_cutoff)).zfill(2)
     dist_str = str(int(dist_cutoff)).zfill(2)
@@ -1088,10 +1089,10 @@ def calculate_scores(
         # Process both directions
         for c1, c2 in [(c_a, c_b), (c_b, c_a)]:
             # Asym values
-            ipsae_res_val, _, ipsae_res_idx, _ = get_max_info(ipsae_d0res_byres, c1, c2)
-            ipsae_chn_val, _, _, _ = get_max_info(ipsae_d0chn_byres, c1, c2)
-            ipsae_dom_val, _, _, _ = get_max_info(ipsae_d0dom_byres, c1, c2)
-            iptm_chn_val, _, _, _ = get_max_info(iptm_d0chn_byres, c1, c2)
+            ipsae_res_val, _, ipsae_res_idx = get_max_info(ipsae_d0res_byres, c1, c2)
+            ipsae_chn_val, _, _ = get_max_info(ipsae_d0chn_byres, c1, c2)
+            ipsae_dom_val, _, _ = get_max_info(ipsae_d0dom_byres, c1, c2)
+            iptm_chn_val, _, _ = get_max_info(iptm_d0chn_byres, c1, c2)
 
             # Get n0res/d0res at max index
             n0res_val = n0res_byres[c1][c2][ipsae_res_idx]
@@ -1104,8 +1105,10 @@ def calculate_scores(
             dist2_cnt = len(dist_unique_residues_chain2[c1][c2])
 
             # ipTM AF
+            # In AF2, this is the same value for all chain pairs
+            # In AF3 and Boltz, this is chain-pair specific (symmetric)
             iptm_af = pae_data.iptm_dict[c1][c2]
-            if iptm_af == 0 and pae_data.iptm != -1:
+            if iptm_af == 0.0 and pae_data.iptm != -1.0:
                 iptm_af = pae_data.iptm  # Fallback to global if per-pair not found
 
             outstring = (
@@ -1142,6 +1145,19 @@ def calculate_scores(
                 "lis": LIS[c1][c2],
             }
 
+            # PyMOL script generation
+            color1 = CHAIN_COLOR.get(c1, "magenta")
+            color2 = CHAIN_COLOR.get(c2, "marine")
+            chain_pair_name = f"color_{c1}_{c2}"
+
+            # Ranges
+            r1_ranges = contiguous_ranges(unique_residues_chain1[c1][c2])
+            r2_ranges = contiguous_ranges(unique_residues_chain2[c1][c2])
+
+            pymol_lines.append(
+                f"alias {chain_pair_name}, color gray80, all; color {color1}, chain {c1} and resi {r1_ranges}; color {color2}, chain {c2} and resi {r2_ranges}\n\n"
+            )
+
         # Max values (symmetric)
         # Logic: compare c1->c2 and c2->c1, take max
         # For simplicity, I'll just re-calculate max here based on computed asyms
@@ -1157,8 +1173,8 @@ def calculate_scores(
         # Now c1 > c2
         # Calculate max values
         def get_max_of_pair(arr, k1, k2):
-            v1, _, i1, _ = get_max_info(arr, k1, k2)
-            v2, _, i2, _ = get_max_info(arr, k2, k1)
+            v1, _, i1 = get_max_info(arr, k1, k2)
+            v2, _, i2 = get_max_info(arr, k2, k1)
             if v1 >= v2:
                 return v1, i1, k1, k2
             return v2, i2, k2, k1
@@ -1175,8 +1191,8 @@ def calculate_scores(
         d0res_max = d0res_byres[mk1_res][mk2_res][idx_res]
 
         # n0dom/d0dom for max (need to find which direction gave max ipsae_dom)
-        v1_dom, _, _, _ = get_max_info(ipsae_d0dom_byres, c1, c2)
-        v2_dom, _, _, _ = get_max_info(ipsae_d0dom_byres, c2, c1)
+        v1_dom, _, _ = get_max_info(ipsae_d0dom_byres, c1, c2)
+        v2_dom, _, _ = get_max_info(ipsae_d0dom_byres, c2, c1)
         if v1_dom >= v2_dom:
             n0dom_max = n0dom[c1][c2]
             d0dom_max = d0dom[c1][c2]
@@ -1235,22 +1251,8 @@ def calculate_scores(
             f"{pdb_stem}\n"
         )
         summary_lines.append(outstring)
+        summary_lines.append("\n")
         pymol_lines.append("# " + outstring)
-
-        # PyMOL script generation
-        color1 = CHAIN_COLOR.get(c1, "magenta")
-        color2 = CHAIN_COLOR.get(c2, "marine")
-        chain_pair_name = f"color_{c1}_{c2}"
-
-        # Ranges
-        r1_ranges = contiguous_ranges(unique_residues_chain1[c1][c2])
-        r2_ranges = contiguous_ranges(unique_residues_chain2[c1][c2])
-
-        pymol_lines.append(
-            f"alias {chain_pair_name}, color gray80, all; color {color1}, chain {c1} and resi {r1_ranges}; color {color2}, chain {c2} and resi {r2_ranges}\n\n"
-        )
-
-    summary_lines.append("\n")
 
     return ScoreResults(
         ipsae_scores=ipsae_d0res_byres,
