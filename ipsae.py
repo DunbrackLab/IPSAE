@@ -754,20 +754,21 @@ def load_pae_data(
     )
 
 
-def calculate_pdockq(
+def calculate_pdockq_scores(
     chains: np.ndarray,
     unique_chains: np.ndarray,
     distances: np.ndarray,
+    pae_matrix: np.ndarray,
     cb_plddt: np.ndarray,
     pdockq_dist_cutoff: float = 8.0,
 ):
-    """Calculate pDockQ scores for all chain pairs."""
+    """Calculate pDockQ and pDockQ2 scores for all chain pairs."""
     pDockQ = init_chainpairdict_zeros(unique_chains, 0.0)
+    pDockQ2 = init_chainpairdict_zeros(unique_chains, 0.0)
     for c1 in unique_chains:
         for c2 in unique_chains:
             if c1 == c2:
                 continue
-            npairs = 0
 
             # Vectorized approach for speed
             c1_indices = np.where(chains == c1)[0]
@@ -794,59 +795,20 @@ def calculate_pdockq(
                 ].mean()
                 x = mean_plddt * np.log10(npairs)
                 pDockQ[c1][c2] = 0.724 / (1 + np.exp(-0.052 * (x - 152.611))) + 0.018
-            else:
-                pDockQ[c1][c2] = 0.0
 
-    return pDockQ
-
-
-def calculate_pdockq2(
-    chains: np.ndarray,
-    unique_chains: np.ndarray,
-    distances: np.ndarray,
-    pae_matrix: np.ndarray,
-    cb_plddt: np.ndarray,
-    pdockq_dist_cutoff: float = 8.0,
-):
-    """Calculate pDockQ2 scores for all chain pairs."""
-    pDockQ2 = init_chainpairdict_zeros(unique_chains, 0.0)
-    for c1 in unique_chains:
-        for c2 in unique_chains:
-            if c1 == c2:
-                continue
-
-            c1_indices = np.where(chains == c1)[0]
-            c2_indices = np.where(chains == c2)[0]
-
-            if len(c1_indices) == 0 or len(c2_indices) == 0:
-                continue
-
-            dists_sub = distances[np.ix_(c1_indices, c2_indices)]
-            pae_sub = pae_matrix[np.ix_(c1_indices, c2_indices)]
-
-            valid_mask = dists_sub <= pdockq_dist_cutoff
-            npairs = np.sum(valid_mask)
-
-            if npairs > 0:
+                # Also find sub-matrix for pDockQ2 calculation
+                pae_sub = pae_matrix[np.ix_(c1_indices, c2_indices)]
                 pae_valid = pae_sub[valid_mask]
                 pae_ptm_sum = ptm_func_vec(pae_valid, 10.0).sum()
 
-                # Interface residues on c2 (already computed in pDockQ loop ideally, but recomputing is safe)
-                c1_interface_mask = valid_mask.any(axis=1)
-                c1_interface_indices = c1_indices[c1_interface_mask]
-                c2_interface_mask = valid_mask.any(axis=0)
-                c2_interface_indices = c2_indices[c2_interface_mask]
-
-                mean_plddt = cb_plddt[
-                    np.hstack([c1_interface_indices, c2_interface_indices])
-                ].mean()
                 mean_ptm = pae_ptm_sum / npairs
                 x = mean_plddt * mean_ptm
                 pDockQ2[c1][c2] = 1.31 / (1 + math.exp(-0.075 * (x - 84.733))) + 0.005
-            else:
-                pDockQ2[c1][c2] = 0.0
+            # else:
+            #     pDockQ[c1][c2] = 0.0
+            #     pDockQ2[c1][c2] = 0.0
 
-    return pDockQ2
+    return pDockQ, pDockQ2
 
 
 def calculate_lis(
@@ -929,16 +891,17 @@ def calculate_scores(
     distances = structure.distances
     pae_matrix = pae_data.pae_matrix
     cb_plddt = pae_data.cb_plddt
-    plddt = pae_data.plddt
 
-    # Calculate scores
-    pDockQ = calculate_pdockq(chains, unique_chains, distances, cb_plddt)
-    pDockQ2 = calculate_pdockq2(chains, unique_chains, distances, pae_matrix, cb_plddt)
+    # Calculate pDockQ and LIS scores
+    pDockQ, pDockQ2 = calculate_pdockq_scores(
+        chains, unique_chains, distances, pae_matrix, cb_plddt
+    )
     LIS = calculate_lis(chains, unique_chains, pae_matrix)
 
     # --- ipTM / ipSAE ---
     # Initialize containers
     residues = structure.residues
+    plddt = pae_data.plddt
     numres = structure.numres
 
     iptm_d0chn_byres = init_chainpairdict_npzeros(unique_chains, numres)
