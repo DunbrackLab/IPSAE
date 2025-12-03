@@ -236,7 +236,7 @@ class PerResScoreResults:
     pSAE_d0dom: float
     pSAE: float
 
-    def to_formatted_line(self) -> str:
+    def to_formatted_line(self, end: str = "") -> str:
         """Format the per-residue score results as a fixed-width string."""
         c1, c2 = self.AlignChn, self.ScoredChn
         return (
@@ -255,18 +255,13 @@ class PerResScoreResults:
             f"{self.pTM_pae:8.4f}    "
             f"{self.pSAE_d0chn:8.4f}    "
             f"{self.pSAE_d0dom:8.4f}    "
-            f"{self.pSAE:8.4f}\n"
+            f"{self.pSAE:8.4f}{end}"
         )
 
     @staticmethod
     def header_line() -> str:
         """Return the header line for the per-residue score output."""
         return "i   AlignChn ScoredChain  AlignResNum  AlignResType  AlignRespLDDT      n0chn  n0dom  n0res    d0chn     d0dom     d0res   ipTM_pae  ipSAE_d0chn ipSAE_d0dom    ipSAE \n"
-
-    @staticmethod
-    def csv_header_line() -> str:
-        """Return the CSV header line for the per-residue score output."""
-        return "i,AlignChn,ScoredChain,AlignResNum,AlignResType,AlignRespLDDT,n0chn,n0dom,n0res,d0chn,d0dom,d0res,ipTM_pae,ipSAE_d0chn,ipSAE_d0dom,ipSAE\n"
 
 
 @dataclass
@@ -302,8 +297,8 @@ class ChainPairScoreResults:
 
     Chn1: str
     Chn2: str
-    PAE: int
-    Dist: int
+    PAE: float
+    Dist: float
     Type: str
     ipSAE: float
     ipSAE_d0chn: float
@@ -325,10 +320,10 @@ class ChainPairScoreResults:
     dist2: int
     Model: str
 
-    def to_formatted_line(self) -> str:
+    def to_formatted_line(self, end: str = "") -> str:
         """Format the summary result as a fixed-width string."""
-        pae_str = str(self.PAE).zfill(2)
-        dist_str = str(self.Dist).zfill(2)
+        pae_str = str(int(self.PAE)).zfill(2)
+        dist_str = str(int(self.Dist)).zfill(2)
         return (
             f"{self.Chn1}    {self.Chn2}     {pae_str:3}  {dist_str:3}  {self.Type:5} "
             f"{self.ipSAE:8.6f}    "
@@ -349,18 +344,13 @@ class ChainPairScoreResults:
             f"{self.nres2:5d}   "
             f"{self.dist1:5d}   "
             f"{self.dist2:5d}   "
-            f"{self.Model}\n"
+            f"{self.Model}{end}"
         )
 
     @staticmethod
     def header_line() -> str:
         """Return the header line for the summary output."""
         return "Chn1 Chn2  PAE Dist  Type   ipSAE    ipSAE_d0chn ipSAE_d0dom  ipTM_af  ipTM_d0chn     pDockQ     pDockQ2    LIS       n0res  n0chn  n0dom   d0res   d0chn   d0dom  nres1   nres2   dist1   dist2  Model\n"
-
-    @staticmethod
-    def csv_header_line() -> str:
-        """Return the CSV header line for the summary output."""
-        return "Chn1,Chn2,PAE,Dist,Type,ipSAE,ipSAE_d0chn,ipSAE_d0dom,ipTM_af,ipTM_d0chn,pDockQ,pDockQ2,LIS,n0res,n0chn,n0dom,d0res,d0chn,d0dom,nres1,nres2,dist1,dist2,Model\n"
 
 
 @dataclass
@@ -1062,8 +1052,6 @@ def aggregate_byres_scores(
         idx = np.argmax(vals)
         return vals[idx], residues[idx].residue_str, idx
 
-    pae_int = int(pae_cutoff)
-    dist_int = int(dist_cutoff)
     chainpairs = set()
     for c1 in unique_chains:
         for c2 in unique_chains:
@@ -1103,8 +1091,8 @@ def aggregate_byres_scores(
             summary_result = ChainPairScoreResults(
                 Chn1=c1,
                 Chn2=c2,
-                PAE=pae_int,
-                Dist=dist_int,
+                PAE=pae_cutoff,
+                Dist=dist_cutoff,
                 Type="asym",
                 ipSAE=float(ipsae_res_val),
                 ipSAE_d0chn=float(ipsae_chn_val),
@@ -1127,7 +1115,7 @@ def aggregate_byres_scores(
                 Model=pdb_stem,
             )
             chain_pair_scores.append(summary_result)
-            pymol_lines.append("# " + summary_result.to_formatted_line())
+            pymol_lines.append("# " + summary_result.to_formatted_line(end="\n"))
 
             # Store in results dict
             results_metrics[f"{c1}_{c2}"] = {
@@ -1224,8 +1212,8 @@ def aggregate_byres_scores(
         summary_result = ChainPairScoreResults(
             Chn1=c2,
             Chn2=c1,
-            PAE=pae_int,
-            Dist=dist_int,
+            PAE=pae_cutoff,
+            Dist=dist_cutoff,
             Type="max",
             ipSAE=float(ipsae_res_max),
             ipSAE_d0chn=float(ipsae_chn_max),
@@ -1248,7 +1236,7 @@ def aggregate_byres_scores(
             Model=pdb_stem,
         )
         chain_pair_scores.append(summary_result)
-        pymol_lines.append("# " + summary_result.to_formatted_line())
+        pymol_lines.append("# " + summary_result.to_formatted_line(end="\n"))
 
     return chain_pair_scores, pymol_lines, results_metrics
 
@@ -1512,19 +1500,32 @@ def write_outputs(results: ScoreResults, output_prefix: str | Path) -> None:
         results: The ScoreResults object containing the data to write.
         output_prefix: The prefix for the output filenames (including path).
     """
-    with Path(f"{output_prefix}.txt").open("w") as f:
-        f.write("\n")  # Leading newline
-        f.write(ChainPairScoreResults.header_line())
+    # Append to file if it exists, since we may be processing multiple models
+    # or comparing different input parameters
+    chain_pair_scores_file = Path(f"{output_prefix}.txt")
+    if chain_pair_scores_file.exists():
+        existing_chain_pair_lines = set(
+            chain_pair_scores_file.read_text().strip().splitlines()
+        )
+    else:
+        existing_chain_pair_lines = set()
+        chain_pair_scores_file.write_text("\n" + ChainPairScoreResults.header_line())
+    with chain_pair_scores_file.open("a") as f:
         for summary in results.chain_pair_scores:
-            f.write(summary.to_formatted_line())
-            # Add newline after "max" line (end of each chain pair group)
-            if summary.Type == "max":
-                f.write("\n")
+            line_str = summary.to_formatted_line()
+            if line_str not in existing_chain_pair_lines:
+                f.write(f"{line_str}\n")
 
+                # Add newline after "max" line (end of each chain pair group)
+                if summary.Type == "max":
+                    f.write("\n")
+
+    # For per-residue scores and PyMOL scripts, overwrite each time
     with Path(f"{output_prefix}_byres.txt").open("w") as f:
-        f.write(results.by_res_scores[0].header_line())
-        for res_line in results.by_res_scores:
-            f.write(res_line.to_formatted_line())
+        f.write(PerResScoreResults.header_line())
+        f.writelines(
+            res_line.to_formatted_line(end="\n") for res_line in results.by_res_scores
+        )
 
     with Path(f"{output_prefix}.pml").open("w") as f:
         f.writelines(results.pymol_script)
@@ -1621,7 +1622,6 @@ def main(
     pae_cutoff: float,
     dist_cutoff: float,
     model_type: str,
-    output_dir: Path | None,
 ) -> ScoreResults:
     """Entry point for the script.
 
@@ -1636,30 +1636,6 @@ def main(
     results = calculate_scores(
         structure_data, pae_data, pae_cutoff, dist_cutoff, pdb_stem
     )
-    if output_dir is not None:
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        pae_str = str(int(pae_cutoff)).zfill(2)
-        dist_str = str(int(dist_cutoff)).zfill(2)
-        output_prefix = output_dir / f"{pdb_stem}_{pae_str}_{dist_str}"
-        write_outputs(results, output_prefix)
-        logger.info(
-            f"Success! Outputs written to {output_prefix}{{.txt,_byres.txt,.pml}}"
-        )
-    else:
-        # Print summary to stdout
-        print("#" * 90 + "\n# Summary\n" + "#" * 90)
-        print("\n" + ChainPairScoreResults.header_line(), end="")
-        for summary in results.chain_pair_scores:
-            print(summary.to_formatted_line(), end="")
-            if summary.Type == "max":
-                print()
-        print("#" * 90 + "\n# Per-residue scores\n" + "#" * 90)
-        print(results.by_res_scores[0].header_line())
-        print("".join(x.to_formatted_line() for x in results.by_res_scores))
-        print("#" * 90 + "\n# PyMOL script\n" + "#" * 90)
-        print("".join(results.pymol_script))
-
     return results
 
 
@@ -1673,5 +1649,30 @@ if __name__ == "__main__":
         pae_cutoff=args.pae_cutoff,
         dist_cutoff=args.dist_cutoff,
         model_type=args.model_type,
-        output_dir=args.output_dir,
     )
+
+    if args.output_dir is not None:
+        args.output_dir.mkdir(parents=True, exist_ok=True)
+
+        pae_str = str(int(args.pae_cutoff)).zfill(2)
+        dist_str = str(int(args.dist_cutoff)).zfill(2)
+        pdb_stem = args.structure_file.stem
+        output_prefix = args.output_dir / f"{pdb_stem}_{pae_str}_{dist_str}"
+        write_outputs(scores, output_prefix)
+        logger.info(
+            f"Success! Outputs written to {output_prefix}{{.txt,_byres.txt,.pml}}"
+        )
+    else:
+        # Print summary to stdout
+        print("#" * 90 + "\n# Summary\n" + "#" * 90)
+        print("\n" + ChainPairScoreResults.header_line(), end="")
+        for summary in scores.chain_pair_scores:
+            line_end = "\n" if summary.Type == "max" else ""
+            print(summary.to_formatted_line(end="\n"), end=line_end)
+
+        print("#" * 90 + "\n# Per-residue scores\n" + "#" * 90)
+        print(PerResScoreResults.header_line())
+        print("\n".join(x.to_formatted_line() for x in scores.by_res_scores))
+
+        print("#" * 90 + "\n# PyMOL script\n" + "#" * 90)
+        print("".join(scores.pymol_script))
