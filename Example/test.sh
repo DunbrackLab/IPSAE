@@ -5,7 +5,7 @@ if [ "${DEBUG:-0}" -eq 1 ]; then
 fi
 
 self_dir=$(dirname "$(realpath "$0")")
-ipsae_py_path="${self_dir}/../ipsae.py"
+ipsae_py_path="${self_dir}/../src/ipsae/ipsae.py"
 
 # Run on AF2 input files
 echo '========== Running tests on AF2 input files =========='

@@ -749,6 +749,29 @@ def load_structure(struct_path: Path) -> StructureData:
     )
 
 
+def load_obj_from_file(file_path: Path):
+    """Load an object from a file (numpy .npy/.npz/.pkl or JSON).
+
+    Args:
+        file_path: Path to the file.
+
+    Returns:
+        The loaded object (numpy array or dictionary).
+    """
+    if not file_path.exists():
+        raise FileNotFoundError(f"File not found: {file_path}")
+
+    if file_path.suffix in {".npy", ".npz"}:
+        return np.load(file_path)
+    elif file_path.suffix == ".pkl":
+        return np.load(file_path, allow_pickle=True)
+    elif file_path.suffix == ".json":
+        with file_path.open() as f:
+            return json.load(f)
+    else:
+        raise ValueError(f"Unsupported file format: {file_path.suffix}")
+
+
 def load_pae_data(
     pae_path: Path, structure_data: StructureData, model_type: str
 ) -> PAEData:
@@ -804,11 +827,7 @@ def load_pae_data(
 
     if model_type == "af2":
         # Load all scores from input PAE file
-        if pae_path.suffix == ".pkl":
-            data = np.load(pae_path, allow_pickle=True)
-        else:
-            with pae_path.open() as f:
-                data = json.load(f)
+        data = load_obj_from_file(pae_path)
 
         iptm_val = float(data.get("iptm", -1.0))
         ptm_val = float(data.get("ptm", -1.0))
@@ -830,7 +849,7 @@ def load_pae_data(
         # Load pLDDT if file exists
         plddt_path = pae_path.with_name(pae_path.name.replace("pae", "plddt"))
         if plddt_path.exists():
-            data_plddt = np.load(plddt_path)
+            data_plddt = load_obj_from_file(plddt_path)
             # Boltz plddt is 0-1, convert to 0-100
             plddt_boltz = np.array(100.0 * data_plddt["plddt"])
 
@@ -844,7 +863,7 @@ def load_pae_data(
             cb_plddt = np.zeros(ntokens)
 
         # Load PAE matrix
-        data_pae = np.load(pae_path)
+        data_pae = load_obj_from_file(pae_path)
         pae_full = np.array(data_pae["pae"])
         pae_matrix = pae_full[np.ix_(mask_bool, mask_bool)]
 
@@ -853,24 +872,22 @@ def load_pae_data(
             pae_path.name.replace("pae", "confidence")
         ).with_suffix(".json")
         if summary_path.exists():
-            with summary_path.open() as f:
-                data_summary = json.load(f)
-                if "pair_chains_iptm" in data_summary:
-                    boltz_iptm = data_summary["pair_chains_iptm"]
-                    # Map indices to chains
-                    # TODO: is this the right order?
-                    for i, c1 in enumerate(unique_chains):
-                        for j, c2 in enumerate(unique_chains):
-                            if c1 == c2:
-                                continue
-                            # Keys in json are strings of indices
-                            iptm_dict[c1][c2] = boltz_iptm[str(i)][str(j)]
+            data_summary = load_obj_from_file(summary_path)
+            if "pair_chains_iptm" in data_summary:
+                boltz_iptm = data_summary["pair_chains_iptm"]
+                # Map indices to chains
+                # TODO: is this the right order?
+                for i, c1 in enumerate(unique_chains):
+                    for j, c2 in enumerate(unique_chains):
+                        if c1 == c2:
+                            continue
+                        # Keys in json are strings of indices
+                        iptm_dict[c1][c2] = boltz_iptm[str(i)][str(j)]
         else:
             logger.warning(f"Boltz1 confidence summary file not found: {summary_path}")
 
     elif model_type == "af3":
-        with pae_path.open() as f:
-            data = json.load(f)
+        data = load_obj_from_file(pae_path)
 
         atom_plddts = np.array(data["atom_plddts"])
 
@@ -903,8 +920,7 @@ def load_pae_data(
             )
 
         if summary_path and summary_path.exists():
-            with summary_path.open() as f:
-                data_summary = json.load(f)
+            data_summary = load_obj_from_file(summary_path)
             if "chain_pair_iptm" in data_summary:
                 af3_iptm = data_summary["chain_pair_iptm"]
                 for i, c1 in enumerate(unique_chains):
@@ -912,8 +928,16 @@ def load_pae_data(
                         if c1 == c2:
                             continue
                         iptm_dict[c1][c2] = af3_iptm[i][j]
+            else:
+                logger.warning(
+                    f"AF3 summary confidences file missing key 'chain_pair_iptm': {summary_path}"
+                )
+        elif summary_path:
+            logger.warning(f"AF3 summary confidences file not found: {summary_path}")
         else:
-            logger.warning("AF3 summary confidences file not found")
+            logger.warning(
+                f"Could not determine AF3 summary confidences file path from PAE file: {pae_path}"
+            )
 
     return PAEData(
         pae_matrix=pae_matrix,
@@ -975,9 +999,6 @@ def calculate_pdockq_scores(
                 mean_ptm = pae_ptm_sum / npairs
                 x = mean_plddt * mean_ptm
                 pDockQ2[c1][c2] = 1.31 / (1 + math.exp(-0.075 * (x - 84.733))) + 0.005
-            # else:
-            #     pDockQ[c1][c2] = 0.0
-            #     pDockQ2[c1][c2] = 0.0
 
     return pDockQ, pDockQ2
 
@@ -1333,9 +1354,6 @@ def calculate_scores(
     dist_unique_residues_chain1 = init_chainpairdict_set(unique_chains)
     dist_unique_residues_chain2 = init_chainpairdict_set(unique_chains)
 
-    # valid_pair_counts = init_chainpairdict_zeros(unique_chains, 0)
-    # dist_valid_pair_counts = init_chainpairdict_zeros(unique_chains, 0)
-
     # First pass: d0chn
     # Calculate ipTM/ipSAE with and without PAE cutoff
     for c1 in unique_chains:
@@ -1369,7 +1387,6 @@ def calculate_scores(
             )
 
             # Track unique residues contributing to the ipSAE for c1,2
-            # valid_pair_counts[c1][c2] = np.sum(valid_pairs_mask)
             c1_contrib_residues = set(
                 residues[c1_indices[i]].resnum
                 for i in np.where(valid_pairs_mask.any(axis=1))[0]
@@ -1386,7 +1403,6 @@ def calculate_scores(
             c2_valid_dist_mask = (valid_pairs_mask) & (
                 distances[np.ix_(c1_indices, c2_indices)] < dist_cutoff
             )
-            # dist_valid_pair_counts[c1][c2] = np.sum(c2_valid_dist_mask)
             c1_dist_contrib_residues = set(
                 residues[c1_indices[i]].resnum
                 for i in np.where(c2_valid_dist_mask.any(axis=1))[0]
@@ -1435,21 +1451,21 @@ def calculate_scores(
                 by_res_lines.append(
                     PerResScoreResults(
                         i=int(i + 1),
-                        AlignChn=c1.item(),
-                        ScoredChn=c2.item(),
+                        AlignChn=str(c1),
+                        ScoredChn=str(c2),
                         AlignResNum=residues[i].resnum,
                         AlignResType=residues[i].res,
-                        AlignRespLDDT=plddt[i].item(),
+                        AlignRespLDDT=float(plddt[i]),
                         n0chn=int(n0chn[c1][c2]),
                         n0dom=int(n0dom[c1][c2]),
                         n0res=int(n0res_byres[c1][c2][i]),
                         d0chn=d0chn[c1][c2],
                         d0dom=d0dom[c1][c2],
-                        d0res=d0res_byres[c1][c2][i].item(),
-                        pTM_pae=iptm_d0chn_byres[c1][c2][i].item(),
-                        pSAE_d0chn=ipsae_d0chn_byres[c1][c2][i].item(),
-                        pSAE_d0dom=ipsae_d0dom_byres[c1][c2][i].item(),
-                        pSAE=ipsae_d0res_byres[c1][c2][i].item(),
+                        d0res=float(d0res_byres[c1][c2][i]),
+                        pTM_pae=float(iptm_d0chn_byres[c1][c2][i]),
+                        pSAE_d0chn=float(ipsae_d0chn_byres[c1][c2][i]),
+                        pSAE_d0dom=float(ipsae_d0dom_byres[c1][c2][i]),
+                        pSAE=float(ipsae_d0res_byres[c1][c2][i]),
                     )
                 )
 
