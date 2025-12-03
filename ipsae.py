@@ -1664,15 +1664,15 @@ if __name__ == "__main__":
         )
     else:
         # Print summary to stdout
-        print("#" * 90 + "\n# Summary\n" + "#" * 90)
+        print("#" * 90 + "\n# Per-residue scores\n" + "#" * 90)
+        print(PerResScoreResults.header_line())
+        print("\n".join(x.to_formatted_line() for x in scores.by_res_scores))
+
+        print("\n\n" + "#" * 90 + "\n# Summary\n" + "#" * 90)
         print("\n" + ChainPairScoreResults.header_line(), end="")
         for summary in scores.chain_pair_scores:
             line_end = "\n" if summary.Type == "max" else ""
             print(summary.to_formatted_line(end="\n"), end=line_end)
 
-        print("#" * 90 + "\n# Per-residue scores\n" + "#" * 90)
-        print(PerResScoreResults.header_line())
-        print("\n".join(x.to_formatted_line() for x in scores.by_res_scores))
-
-        print("#" * 90 + "\n# PyMOL script\n" + "#" * 90)
+        print("\n\n" + "#" * 90 + "\n# PyMOL script\n" + "#" * 90)
         print("".join(scores.pymol_script))
