@@ -1,13 +1,16 @@
-"""Refactored version of https://github.com/DunbrackLab/IPSAE/blob/main/ipsae.py.
+"""Self-contained script for calculating the ipSAE score.
 
-Commit hash: b0a54939973a4a4389d0f89492d03e509b22a38f
-
-Changes:
+Changes by @y1zhou
+=============================
 
 - Included chain index fix from https://github.com/DunbrackLab/IPSAE/pull/19
 - Refactored the script into functions for better modularity.
 - Vectorized calculations where possible for performance improvements.
 - Supported specifying model type from command line arguments.
+
+If you have uv installed, you can run the script with:
+
+    uv run ipsae.py --help
 
 Original Script Description
 =============================
@@ -40,8 +43,13 @@ Usage:
 
 All output files will be in same path/folder as cif or pdb file
 """
+# /// script
+# requires-python = ">=3.10"
+# dependencies = [
+#   "numpy<3.0",
+# ]
+# ///
 
-# ruff: noqa: C901, PLR0912, PLR0915
 import argparse
 import json
 import logging
@@ -1616,16 +1624,25 @@ def parse_cli_args() -> CliArgs:
     )
 
 
-def main(
+def ipsae(
     pae_file: Path,
     structure_file: Path,
     pae_cutoff: float,
     dist_cutoff: float,
     model_type: str,
 ) -> ScoreResults:
-    """Entry point for the script.
+    """Calculate ipSAE, pDockQ, pDockQ2, and LIS scores for protein structure models.
 
-    Parses command line arguments, loads data, calculates scores, and writes outputs.
+    Args:
+        pae_file: Path to the PAE file (json, npz, pkl).
+        structure_file: Path to the structure file (pdb, cif).
+        pae_cutoff: Cutoff for PAE to consider a residue pair "good".
+        dist_cutoff: Distance cutoff for contact definition.
+        model_type: Type of the model: af2, af3, boltz1.
+
+    Returns:
+        A ScoreResults object containing all calculated scores and output strings.
+        The main attributes are chain_pair_scores, by_res_scores, and pymol_script.
     """
     # Load data
     structure_data = load_structure(structure_file)
@@ -1639,11 +1656,15 @@ def main(
     return results
 
 
-if __name__ == "__main__":
+def main():
+    """Entry point for the script.
+
+    Parses command line arguments, loads data, calculates scores, and writes outputs.
+    """
     args = parse_cli_args()
     logger.debug(f"Parsed CLI args: {args}")
     logger.info(f"Detected model type: {args.model_type}")
-    scores = main(
+    scores = ipsae(
         pae_file=args.pae_file,
         structure_file=args.structure_file,
         pae_cutoff=args.pae_cutoff,
@@ -1676,3 +1697,7 @@ if __name__ == "__main__":
 
         print("\n\n" + "#" * 90 + "\n# PyMOL script\n" + "#" * 90)
         print("".join(scores.pymol_script))
+
+
+if __name__ == "__main__":
+    main()
