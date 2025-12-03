@@ -29,6 +29,12 @@ python
 >>> help(ipsae)
 ```
 
+Once installed, the script can also be run from the command line with:
+
+```shell
+ipsae --help
+```
+
 # Usage
 
 AlphaFold2:
