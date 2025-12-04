@@ -1632,7 +1632,10 @@ def calculate_chain_group_scores(
     )
     results_metrics: dict[str, dict[str, float]] = {}
 
-    # Dummy dictionaries for return value compatibility
+    # These dictionaries are left empty for chain group calculations because
+    # the ScoreResults dataclass expects them, but chain groups use a different
+    # indexing scheme (chain group names instead of individual chain pairs).
+    # The main results are stored in chain_pair_scores and by_res_scores.
     ipsae_scores: dict[str, dict[str, np.ndarray]] = {}
     iptm_scores: dict[str, dict[str, np.ndarray]] = {}
     pdockq_scores: dict[str, dict[str, float]] = {}
@@ -1658,10 +1661,22 @@ def calculate_chain_group_scores(
         g2_indices = get_chain_group_indices(chains, group2)
 
         if len(g1_indices) == 0 or len(g2_indices) == 0:
-            logger.warning(
-                f"Skipping chain group pair {g1_name}/{g2_name}: "
-                "one or both groups have no residues."
-            )
+            # Identify which chains are missing
+            available_chains = set(structure.unique_chains)
+            missing_g1 = [c for c in group1 if c not in available_chains]
+            missing_g2 = [c for c in group2 if c not in available_chains]
+            missing_chains = missing_g1 + missing_g2
+            if missing_chains:
+                logger.warning(
+                    f"Skipping chain group pair {g1_name}/{g2_name}: "
+                    f"chain(s) {', '.join(missing_chains)} not found in structure. "
+                    f"Available chains: {', '.join(sorted(available_chains))}"
+                )
+            else:
+                logger.warning(
+                    f"Skipping chain group pair {g1_name}/{g2_name}: "
+                    "one or both groups have no residues."
+                )
             continue
 
         pair_type = determine_pair_type(group1, group2)

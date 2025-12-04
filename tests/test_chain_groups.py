@@ -22,7 +22,7 @@ class TestParseChainGroups:
     def test_single_pair_single_chains(self):
         """Test parsing a single pair of single chains."""
         result = parse_chain_groups("A/B")
-        assert result == [([["A"]], [["B"]])] or result == [(["A"], ["B"])]
+        assert result == [(["A"], ["B"])]
         assert len(result) == 1
         assert result[0][0] == ["A"]
         assert result[0][1] == ["B"]
