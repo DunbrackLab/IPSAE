@@ -152,14 +152,23 @@ class TestChainGroupScoring:
             chain_groups=chain_groups,
         )
 
-        # Should have 3 chain pair results (one for each specified group pair)
-        assert len(results.chain_pair_scores) == 3
+        # Each chain group pair generates both directions + max
+        # A/B+C => A->B+C, B+C->A, max for A/B+C
+        # A/B => A->B, B->A, max for A/B
+        # A/C => A->C, C->A, max for A/C
+        # Total = 6 asym + 3 max = 9
+        assert len(results.chain_pair_scores) == 9
 
-        # Check chain group names
-        chain_pair_names = [(r.Chn1, r.Chn2) for r in results.chain_pair_scores]
+        # Check chain group names (asym only)
+        chain_pair_names = [
+            (r.Chn1, r.Chn2) for r in results.chain_pair_scores if r.Type == "asym"
+        ]
         assert ("A", "B+C") in chain_pair_names
+        assert ("B+C", "A") in chain_pair_names
         assert ("A", "B") in chain_pair_names
+        assert ("B", "A") in chain_pair_names
         assert ("A", "C") in chain_pair_names
+        assert ("C", "A") in chain_pair_names
 
         # Check that scores are reasonable (between 0 and 1)
         for result in results.chain_pair_scores:
@@ -223,8 +232,14 @@ class TestChainGroupScoring:
             chain_groups=chain_groups,
         )
 
+        # A/B+C generates 3 results: A->B+C, B+C->A, max
+        assert len(results.chain_pair_scores) == 3
+
+        # Find the A->B+C result
+        a_to_bc = [
+            r for r in results.chain_pair_scores if r.Chn1 == "A" and r.Chn2 == "B+C"
+        ][0]
         # Chain A has 139 residues, B has 120, C has 111
         # Combined B+C should be 231 residues
         # n0chn should be 139 + 231 = 370
-        result = results.chain_pair_scores[0]
-        assert result.n0chn == 370
+        assert a_to_bc.n0chn == 370
