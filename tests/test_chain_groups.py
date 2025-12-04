@@ -22,7 +22,6 @@ class TestParseChainGroups:
     def test_single_pair_single_chains(self):
         """Test parsing a single pair of single chains."""
         result = parse_chain_groups("A/B")
-        assert result == [(["A"], ["B"])]
         assert len(result) == 1
         assert result[0][0] == ["A"]
         assert result[0][1] == ["B"]
@@ -32,6 +31,7 @@ class TestParseChainGroups:
         result = parse_chain_groups("A/H+L")
         assert len(result) == 1
         assert result[0][0] == ["A"]
+        # Chains are sorted within each group
         assert result[0][1] == ["H", "L"]
 
     def test_multiple_pairs(self):
@@ -46,6 +46,7 @@ class TestParseChainGroups:
         """Test parsing where both groups have multiple chains."""
         result = parse_chain_groups("A+B/C+D")
         assert len(result) == 1
+        # Chains are sorted within each group
         assert result[0][0] == ["A", "B"]
         assert result[0][1] == ["C", "D"]
 
@@ -77,6 +78,33 @@ class TestParseChainGroups:
             ValueError, match="Both groups must contain at least one chain"
         ):
             parse_chain_groups("A/")
+
+    def test_ellipsis_token(self):
+        """Test that ... token adds all individual chain permutations."""
+        unique_chains = np.array(["A", "B", "C"])
+        result = parse_chain_groups("A/B+C,...", unique_chains)
+        # Should have A/B+C plus all individual pairs not already included
+        # A->B, A->C, B->A, B->C, C->A, C->B = 6 pairs (but A->B and A->C might overlap)
+        # Plus the original A/B+C
+        assert (["A"], ["B", "C"]) in result
+        # Check that individual pairs are added
+        assert (["A"], ["B"]) in result
+        assert (["B"], ["A"]) in result
+
+    def test_ellipsis_requires_unique_chains(self):
+        """Test that ... token requires unique_chains parameter."""
+        with pytest.raises(ValueError, match="Cannot use '...' without"):
+            parse_chain_groups("A/B,...")
+
+    def test_duplicate_removal(self):
+        """Test that duplicate pairs are removed."""
+        result = parse_chain_groups("A/B,A/B,B/A")
+        # A/B appears twice, should be deduplicated
+        # B/A is a different pair (different direction)
+        assert len(result) == 2
+        assert (["A"], ["B"]) in result
+        assert (["A"], ["B"]) == result[0]  # First occurrence kept
+        assert (["B"], ["A"]) in result
 
 
 class TestGetChainGroupIndices:
