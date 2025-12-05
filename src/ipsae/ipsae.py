@@ -57,7 +57,6 @@ import logging
 import math
 import os
 from dataclasses import dataclass
-from itertools import combinations
 from pathlib import Path
 from typing import overload
 
@@ -250,7 +249,7 @@ class PerResScoreResults:
         """Format the per-residue score results as a fixed-width string."""
         c1, c2 = self.AlignChn, self.ScoredChn
         return (
-            f"{self.i:<4d}    "
+            f"{self.i:<8d}"
             f"{c1:<10}"
             f"{c2:<10}"
             f"{self.AlignResNum:4d}           "
@@ -336,7 +335,7 @@ class ChainPairScoreResults:
         dist_str = str(int(self.Dist)).zfill(2)
 
         return (
-            f"{self.Chn1:<5}{self.Chn2:<6}{pae_str:3}  {dist_str:3}  {self.Type:5} "
+            f"{self.Chn1:<5}{self.Chn2:<5} {pae_str:3}  {dist_str:3}  {self.Type:5} "
             f"{self.ipSAE:8.6f}    "
             f"{self.ipSAE_d0chn:8.6f}    "
             f"{self.ipSAE_d0dom:8.6f}    "
@@ -1260,8 +1259,9 @@ def aggregate_byres_scores(
             if len(group1) == 1 and len(group2) == 1:
                 # Individual chains - try to get from iptm_dict
                 single_c1, single_c2 = group1[0], group2[0]
-                if single_c1 in pae_data.iptm_dict and single_c2 in pae_data.iptm_dict.get(
-                    single_c1, {}
+                if (
+                    single_c1 in pae_data.iptm_dict
+                    and single_c2 in pae_data.iptm_dict.get(single_c1, {})
                 ):
                     iptm_af = pae_data.iptm_dict[single_c1][single_c2]
             if iptm_af == 0.0 and pae_data.iptm != -1.0:
@@ -1935,8 +1935,8 @@ def main():
         print("\n\n" + "#" * 90 + "\n# Summary\n" + "#" * 90)
         print("\n" + ChainPairScoreResults.header_line(), end="")
         for summary in scores.chain_pair_scores:
-            # line_end = "\n" if summary.Type == "max" else ""
-            print(summary.to_formatted_line(end="\n"), end="")
+            line_end = "\n" if summary.Type == "max" else ""
+            print(summary.to_formatted_line(end="\n"), end=line_end)
 
         print("\n\n" + "#" * 90 + "\n# PyMOL script\n" + "#" * 90)
         print("".join(scores.pymol_script))
