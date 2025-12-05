@@ -593,14 +593,18 @@ def parse_chain_groups(
                 f"Invalid chain group pair: '{pair}'. Both groups must contain at least one chain."
             )
 
-        # Add to result if not a duplicate
-        pair_key = f"{chain_group_name(group1)}/{chain_group_name(group2)}"
-        if pair_key not in seen:
-            seen.add(pair_key)
+        # Add to result if not a duplicate (check both directions)
+        pair_key_forward = f"{chain_group_name(group1)}/{chain_group_name(group2)}"
+        pair_key_reverse = f"{chain_group_name(group2)}/{chain_group_name(group1)}"
+        if pair_key_forward not in seen:
+            seen.add(pair_key_forward)
+            seen.add(pair_key_reverse)  # Mark reverse as seen too
             result.append((group1, group2))
             result.append((group2, group1))
 
     # Handle ellipsis - add all individual chain permutations
+    # Use nested loops to match original behavior ordering:
+    # For chains [A,B,C]: A->B, A->C, B->A, B->C, C->A, C->B
     if has_ellipsis:
         if unique_chains is None:
             raise ValueError(
@@ -608,12 +612,14 @@ def parse_chain_groups(
                 "The '...' token requires knowledge of available chains."
             )
 
-        for c1, c2 in combinations(unique_chains, 2):
-            pair_key = f"{c1}/{c2}"
-            if pair_key not in seen:
-                seen.add(pair_key)
-                result.append(([c1], [c2]))
-                result.append(([c2], [c1]))
+        for c1 in unique_chains:
+            for c2 in unique_chains:
+                if c1 == c2:
+                    continue
+                pair_key = f"{c1}/{c2}"
+                if pair_key not in seen:
+                    seen.add(pair_key)
+                    result.append(([c1], [c2]))
 
     return result
 
@@ -1321,6 +1327,11 @@ def aggregate_byres_scores(
         if g_b not in ipsae_d0res_byres or g_a not in ipsae_d0res_byres.get(g_b, {}):
             continue
 
+        # Ensure consistent ordering: g1 > g2 alphabetically (to match original output)
+        g1, g2 = g_a, g_b
+        if g1 < g2:
+            g1, g2 = g_b, g_a
+
         # Calculate max values
         def get_max_of_pair(arr, k1, k2):
             v1, _, i1 = get_max_info(arr, k1, k2)
@@ -1330,51 +1341,57 @@ def aggregate_byres_scores(
             return v2, i2, k2, k1
 
         ipsae_res_max, idx_res, mk1_res, mk2_res = get_max_of_pair(
-            ipsae_d0res_byres, g_a, g_b
+            ipsae_d0res_byres, g1, g2
         )
-        ipsae_chn_max, _, _, _ = get_max_of_pair(ipsae_d0chn_byres, g_a, g_b)
-        ipsae_dom_max, _, _, _ = get_max_of_pair(ipsae_d0dom_byres, g_a, g_b)
-        iptm_chn_max, _, _, _ = get_max_of_pair(iptm_d0chn_byres, g_a, g_b)
+        ipsae_chn_max, _, _, _ = get_max_of_pair(ipsae_d0chn_byres, g1, g2)
+        ipsae_dom_max, _, _, _ = get_max_of_pair(ipsae_d0dom_byres, g1, g2)
+        iptm_chn_max, _, _, _ = get_max_of_pair(iptm_d0chn_byres, g1, g2)
 
         # n0/d0 for max
         n0res_max = n0res_byres[mk1_res][mk2_res][idx_res]
         d0res_max = d0res_byres[mk1_res][mk2_res][idx_res]
 
         # n0dom/d0dom for max
-        v1_dom, _, _ = get_max_info(ipsae_d0dom_byres, g_a, g_b)
-        v2_dom, _, _ = get_max_info(ipsae_d0dom_byres, g_b, g_a)
+        v1_dom, _, _ = get_max_info(ipsae_d0dom_byres, g1, g2)
+        v2_dom, _, _ = get_max_info(ipsae_d0dom_byres, g2, g1)
         if v1_dom >= v2_dom:
-            n0dom_max = n0dom[g_a][g_b]
-            d0dom_max = d0dom[g_a][g_b]
+            n0dom_max = n0dom[g1][g2]
+            d0dom_max = d0dom[g1][g2]
         else:
-            n0dom_max = n0dom[g_b][g_a]
-            d0dom_max = d0dom[g_b][g_a]
+            n0dom_max = n0dom[g2][g1]
+            d0dom_max = d0dom[g2][g1]
 
-        # iptm af max - use global for chain groups
-        iptm_af_max = pae_data.iptm if pae_data.iptm != -1.0 else 0.0
+        # iptm af max - for individual chains, use iptm_dict; for groups, use global
+        iptm_af_1 = pae_data.iptm_dict.get(g1, {}).get(g2, 0.0)
+        iptm_af_2 = pae_data.iptm_dict.get(g2, {}).get(g1, 0.0)
+        if iptm_af_1 == 0 and pae_data.iptm != -1.0:
+            iptm_af_1 = pae_data.iptm
+        if iptm_af_2 == 0 and pae_data.iptm != -1.0:
+            iptm_af_2 = pae_data.iptm
+        iptm_af_max = max(iptm_af_1, iptm_af_2)
 
-        pdockq2_max = max(pDockQ2[g_a][g_b], pDockQ2[g_b][g_a])
-        lis_avg = (LIS[g_a][g_b] + LIS[g_b][g_a]) / 2.0
+        pdockq2_max = max(pDockQ2[g1][g2], pDockQ2[g2][g1])
+        lis_avg = (LIS[g1][g2] + LIS[g2][g1]) / 2.0
 
         # Residue counts (max of cross pairs)
         res1_max = max(
-            len(unique_residues_chain2[g_a][g_b]), len(unique_residues_chain1[g_b][g_a])
+            len(unique_residues_chain2[g1][g2]), len(unique_residues_chain1[g2][g1])
         )
         res2_max = max(
-            len(unique_residues_chain1[g_a][g_b]), len(unique_residues_chain2[g_b][g_a])
+            len(unique_residues_chain1[g1][g2]), len(unique_residues_chain2[g2][g1])
         )
         dist1_max = max(
-            len(dist_unique_residues_chain2[g_a][g_b]),
-            len(dist_unique_residues_chain1[g_b][g_a]),
+            len(dist_unique_residues_chain2[g1][g2]),
+            len(dist_unique_residues_chain1[g2][g1]),
         )
         dist2_max = max(
-            len(dist_unique_residues_chain1[g_a][g_b]),
-            len(dist_unique_residues_chain2[g_b][g_a]),
+            len(dist_unique_residues_chain1[g1][g2]),
+            len(dist_unique_residues_chain2[g2][g1]),
         )
 
         summary_result = ChainPairScoreResults(
-            Chn1=g_a,
-            Chn2=g_b,
+            Chn1=g2,
+            Chn2=g1,
             PAE=pae_cutoff,
             Dist=dist_cutoff,
             Type="max",
@@ -1383,14 +1400,14 @@ def aggregate_byres_scores(
             ipSAE_d0dom=float(ipsae_dom_max),
             ipTM_af=float(iptm_af_max),
             ipTM_d0chn=float(iptm_chn_max),
-            pDockQ=float(pDockQ[g_a][g_b]),
+            pDockQ=float(pDockQ[g1][g2]),
             pDockQ2=float(pdockq2_max),
             LIS=float(lis_avg),
             n0res=int(n0res_max),
-            n0chn=int(n0chn[g_a][g_b]),
+            n0chn=int(n0chn[g1][g2]),
             n0dom=int(n0dom_max),
             d0res=float(d0res_max),
-            d0chn=float(d0chn[g_a][g_b]),
+            d0chn=float(d0chn[g1][g2]),
             d0dom=float(d0dom_max),
             nres1=res1_max,
             nres2=res2_max,

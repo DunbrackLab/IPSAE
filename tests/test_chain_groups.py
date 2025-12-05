@@ -20,42 +20,50 @@ class TestParseChainGroups:
     """Tests for parse_chain_groups function."""
 
     def test_single_pair_single_chains(self):
-        """Test parsing a single pair of single chains."""
+        """Test parsing a single pair of single chains (includes both directions)."""
         result = parse_chain_groups("A/B")
-        assert len(result) == 1
-        assert result[0][0] == ["A"]
-        assert result[0][1] == ["B"]
+        # Both directions are generated: A->B and B->A
+        assert len(result) == 2
+        assert (["A"], ["B"]) in result
+        assert (["B"], ["A"]) in result
 
     def test_single_pair_multi_chain_group(self):
         """Test parsing a pair where one group has multiple chains."""
         result = parse_chain_groups("A/H+L")
-        assert len(result) == 1
-        assert result[0][0] == ["A"]
-        # Chains are sorted within each group
-        assert result[0][1] == ["H", "L"]
+        # Both directions are generated
+        assert len(result) == 2
+        assert (["A"], ["H", "L"]) in result
+        assert (["H", "L"], ["A"]) in result
 
     def test_multiple_pairs(self):
-        """Test parsing multiple pairs."""
+        """Test parsing multiple pairs (each generates both directions)."""
         result = parse_chain_groups("A/H+L,A/H,A/L")
-        assert len(result) == 3
-        assert result[0] == (["A"], ["H", "L"])
-        assert result[1] == (["A"], ["H"])
-        assert result[2] == (["A"], ["L"])
+        # 3 pairs x 2 directions = 6 total
+        assert len(result) == 6
+        assert (["A"], ["H", "L"]) in result
+        assert (["H", "L"], ["A"]) in result
+        assert (["A"], ["H"]) in result
+        assert (["H"], ["A"]) in result
+        assert (["A"], ["L"]) in result
+        assert (["L"], ["A"]) in result
 
     def test_both_groups_multi_chain(self):
         """Test parsing where both groups have multiple chains."""
         result = parse_chain_groups("A+B/C+D")
-        assert len(result) == 1
-        # Chains are sorted within each group
-        assert result[0][0] == ["A", "B"]
-        assert result[0][1] == ["C", "D"]
+        # Both directions are generated
+        assert len(result) == 2
+        assert (["A", "B"], ["C", "D"]) in result
+        assert (["C", "D"], ["A", "B"]) in result
 
     def test_whitespace_handling(self):
         """Test that whitespace is handled correctly."""
         result = parse_chain_groups(" A / B + C , D / E ")
-        assert len(result) == 2
-        assert result[0] == (["A"], ["B", "C"])
-        assert result[1] == (["D"], ["E"])
+        # 2 pairs x 2 directions = 4
+        assert len(result) == 4
+        assert (["A"], ["B", "C"]) in result
+        assert (["B", "C"], ["A"]) in result
+        assert (["D"], ["E"]) in result
+        assert (["E"], ["D"]) in result
 
     def test_empty_string(self):
         """Test that empty string returns empty list."""
@@ -83,13 +91,16 @@ class TestParseChainGroups:
         """Test that ... token adds all individual chain permutations."""
         unique_chains = np.array(["A", "B", "C"])
         result = parse_chain_groups("A/B+C,...", unique_chains)
-        # Should have A/B+C plus all individual pairs not already included
-        # A->B, A->C, B->A, B->C, C->A, C->B = 6 pairs (but A->B and A->C might overlap)
-        # Plus the original A/B+C
+        # A/B+C generates 2 directions, plus all individual pairs from ...
+        # Individual pairs: A->B, A->C, B->A, B->C, C->A, C->B = 6
+        # Total should be 8 (2 for A/B+C + 6 for individual)
         assert (["A"], ["B", "C"]) in result
+        assert (["B", "C"], ["A"]) in result
         # Check that individual pairs are added
         assert (["A"], ["B"]) in result
         assert (["B"], ["A"]) in result
+        assert (["A"], ["C"]) in result
+        assert (["C"], ["A"]) in result
 
     def test_ellipsis_requires_unique_chains(self):
         """Test that ... token requires unique_chains parameter."""
@@ -99,11 +110,14 @@ class TestParseChainGroups:
     def test_duplicate_removal(self):
         """Test that duplicate pairs are removed."""
         result = parse_chain_groups("A/B,A/B,B/A")
-        # A/B appears twice, should be deduplicated
-        # B/A is a different pair (different direction)
+        # A/B appears twice, generates A->B and B->A
+        # B/A generates B->A and A->B
+        # But duplicates are removed, so:
+        # First A/B generates: A->B, B->A (both added)
+        # Second A/B: A->B already seen, B->A already seen (neither added)
+        # B/A: B->A already seen, A->B already seen (neither added)
         assert len(result) == 2
         assert (["A"], ["B"]) in result
-        assert (["A"], ["B"]) == result[0]  # First occurrence kept
         assert (["B"], ["A"]) in result
 
 
@@ -169,15 +183,14 @@ class TestChainGroupScoring:
             EXAMPLE_DIR / "5b8c_unrelaxed_alphafold2_multimer_v3_model_4_seed_000.pdb"
         )
 
-        # Test with chain groups
-        chain_groups = parse_chain_groups("A/B+C,A/B,A/C")
+        # Test with chain groups (pass string, not parsed list)
         results = ipsae(
             pae_file=pae_file,
             structure_file=structure_file,
             pae_cutoff=15.0,
             dist_cutoff=15.0,
             model_type="af2",
-            chain_groups=chain_groups,
+            chain_groups="A/B+C,A/B,A/C",
         )
 
         # Each chain group pair generates both directions + max
@@ -250,14 +263,14 @@ class TestChainGroupScoring:
             EXAMPLE_DIR / "5b8c_unrelaxed_alphafold2_multimer_v3_model_4_seed_000.pdb"
         )
 
-        chain_groups = parse_chain_groups("A/B+C")
+        # Pass string, not parsed list
         results = ipsae(
             pae_file=pae_file,
             structure_file=structure_file,
             pae_cutoff=15.0,
             dist_cutoff=15.0,
             model_type="af2",
-            chain_groups=chain_groups,
+            chain_groups="A/B+C",
         )
 
         # A/B+C generates 3 results: A->B+C, B+C->A, max
