@@ -1199,147 +1199,146 @@ def aggregate_byres_scores(
         idx = np.argmax(vals)
         return vals[idx], residues[idx].residue_str, idx
 
-    # Process each chain pair direction
-    unique_pair_set: set[tuple[str, str]] = set()
-    processed_pairs: set[tuple[str, str]] = set()
+    # Build a map from group names to chain lists
+    group_to_chains: dict[str, list[str]] = {}
     for group1, group2 in chain_pairs:
-        # Build unique chain pairs set (for "max" output)
-        # chain_pairs contains both directions, so we need to find unique unordered pairs
         g1 = chain_group_name(group1)
         g2 = chain_group_name(group2)
-        group_name: tuple[str, str] = (g1, g2)
-        pair_key: tuple[str, str] = tuple(sorted(group_name))
-        unique_pair_set.add(pair_key)
+        group_to_chains[g1] = group1
+        group_to_chains[g2] = group2
 
-        # Skip if this exact pair already processed
-        if group_name in processed_pairs:
-            continue
-        processed_pairs.add(group_name)
+    # Identify all unique unordered pairs from chain_pairs
+    unique_pair_set: set[tuple[str, str]] = set()
+    for group1, group2 in chain_pairs:
+        g1 = chain_group_name(group1)
+        g2 = chain_group_name(group2)
+        if g1 != g2:
+            pair_key: tuple[str, str] = tuple(sorted((g1, g2)))
+            unique_pair_set.add(pair_key)
 
-        # Skip if g1 == g2 (shouldn't happen but safety check)
-        if g1 == g2:
-            continue
+    # Helper to get max across both directions
+    def get_max_of_pair(arr, k1, k2):
+        v1, _, i1 = get_max_info(arr, k1, k2)
+        v2, _, i2 = get_max_info(arr, k2, k1)
+        if v1 >= v2:
+            return v1, i1, k1, k2
+        return v2, i2, k2, k1
 
-        # Check if data exists
-        if g1 not in ipsae_d0res_byres or g2 not in ipsae_d0res_byres.get(g1, {}):
-            continue
-
-        # Asym values
-        ipsae_res_val, _, ipsae_res_idx = get_max_info(ipsae_d0res_byres, g1, g2)
-        ipsae_chn_val, _, _ = get_max_info(ipsae_d0chn_byres, g1, g2)
-        ipsae_dom_val, _, _ = get_max_info(ipsae_d0dom_byres, g1, g2)
-        iptm_chn_val, _, _ = get_max_info(iptm_d0chn_byres, g1, g2)
-
-        # Get n0res/d0res at max index
-        n0res_val = n0res_byres[g1][g2][ipsae_res_idx]
-        d0res_val = d0res_byres[g1][g2][ipsae_res_idx]
-
-        # Counts
-        res1_cnt = len(unique_residues_chain1[g1][g2])
-        res2_cnt = len(unique_residues_chain2[g1][g2])
-        dist1_cnt = len(dist_unique_residues_chain1[g1][g2])
-        dist2_cnt = len(dist_unique_residues_chain2[g1][g2])
-
-        # ipTM AF - for chain groups, try individual chains first
-        iptm_af = 0.0
-        if len(group1) == 1 and len(group2) == 1:
-            # Individual chains - try to get from iptm_dict
-            single_c1, single_c2 = group1[0], group2[0]
-            if single_c1 in pae_data.iptm_dict and single_c2 in pae_data.iptm_dict.get(
-                single_c1, {}
-            ):
-                iptm_af = pae_data.iptm_dict[single_c1][single_c2]
-        if iptm_af == 0.0 and pae_data.iptm != -1.0:
-            iptm_af = pae_data.iptm  # Fallback to global
-
-        summary_result = ChainPairScoreResults(
-            Chn1=g1,
-            Chn2=g2,
-            PAE=pae_cutoff,
-            Dist=dist_cutoff,
-            Type="asym",
-            ipSAE=float(ipsae_res_val),
-            ipSAE_d0chn=float(ipsae_chn_val),
-            ipSAE_d0dom=float(ipsae_dom_val),
-            ipTM_af=float(iptm_af),
-            ipTM_d0chn=float(iptm_chn_val),
-            pDockQ=float(pDockQ[g1][g2]),
-            pDockQ2=float(pDockQ2[g1][g2]),
-            LIS=float(LIS[g1][g2]),
-            n0res=int(n0res_val),
-            n0chn=int(n0chn[g1][g2]),
-            n0dom=int(n0dom[g1][g2]),
-            d0res=float(d0res_val),
-            d0chn=float(d0chn[g1][g2]),
-            d0dom=float(d0dom[g1][g2]),
-            nres1=res1_cnt,
-            nres2=res2_cnt,
-            dist1=dist1_cnt,
-            dist2=dist2_cnt,
-            Model=label,
-        )
-        chain_pair_scores.append(summary_result)
-        pymol_lines.append("# " + summary_result.to_formatted_line(end="\n"))
-
-        # Store in results dict
-        results_metrics[f"{g1}_{g2}"] = {
-            "ipsae": float(ipsae_res_val),
-            "iptm": float(iptm_af),
-            "pdockq": float(pDockQ[g1][g2]),
-            "pdockq2": float(pDockQ2[g1][g2]),
-            "lis": float(LIS[g1][g2]),
-        }
-
-        # PyMOL script generation - handle multi-chain groups
-        # Use '-' instead of '+' in alias names for compatibility
-        pymol_g1 = g1.replace("+", "-")
-        pymol_g2 = g2.replace("+", "-")
-        chain_pair_name = f"color_{pymol_g1}_{pymol_g2}"
-
-        # Ranges
-        r1_ranges = contiguous_ranges(unique_residues_chain1[g1][g2])
-        r2_ranges = contiguous_ranges(unique_residues_chain2[g1][g2])
-
-        # Build color commands for each chain in the groups
-        color_cmds = ["color gray80, all"]
-        for chain_id in group1:
-            color = CHAIN_COLOR.get(chain_id, "magenta")
-            if r1_ranges:
-                color_cmds.append(
-                    f"color {color}, chain {chain_id} and resi {r1_ranges}"
-                )
-        for chain_id in group2:
-            color = CHAIN_COLOR.get(chain_id, "marine")
-            if r2_ranges:
-                color_cmds.append(
-                    f"color {color}, chain {chain_id} and resi {r2_ranges}"
-                )
-
-        pymol_lines.append(f"alias {chain_pair_name}, {'; '.join(color_cmds)}\n\n")
-
-    # Max values for each unique pair (symmetric)
+    # Process each unique pair: output both asym directions + max together
     for pair_key in sorted(unique_pair_set):
-        g_a, g_b = pair_key
+        g_a, g_b = pair_key  # Alphabetically sorted
 
-        # Check both directions exist
+        # Check if data exists for both directions
         if g_a not in ipsae_d0res_byres or g_b not in ipsae_d0res_byres.get(g_a, {}):
             continue
         if g_b not in ipsae_d0res_byres or g_a not in ipsae_d0res_byres.get(g_b, {}):
             continue
 
-        # Ensure consistent ordering: g1 > g2 alphabetically (to match original output)
-        g1, g2 = g_a, g_b
-        if g1 < g2:
-            g1, g2 = g_b, g_a
+        # Process both asym directions: g_a -> g_b, then g_b -> g_a
+        for g1, g2 in [(g_a, g_b), (g_b, g_a)]:
+            group1 = group_to_chains[g1]
+            group2 = group_to_chains[g2]
+
+            # Asym values
+            ipsae_res_val, _, ipsae_res_idx = get_max_info(ipsae_d0res_byres, g1, g2)
+            ipsae_chn_val, _, _ = get_max_info(ipsae_d0chn_byres, g1, g2)
+            ipsae_dom_val, _, _ = get_max_info(ipsae_d0dom_byres, g1, g2)
+            iptm_chn_val, _, _ = get_max_info(iptm_d0chn_byres, g1, g2)
+
+            # Get n0res/d0res at max index
+            n0res_val = n0res_byres[g1][g2][ipsae_res_idx]
+            d0res_val = d0res_byres[g1][g2][ipsae_res_idx]
+
+            # Counts
+            res1_cnt = len(unique_residues_chain1[g1][g2])
+            res2_cnt = len(unique_residues_chain2[g1][g2])
+            dist1_cnt = len(dist_unique_residues_chain1[g1][g2])
+            dist2_cnt = len(dist_unique_residues_chain2[g1][g2])
+
+            # ipTM AF - for chain groups, try individual chains first
+            iptm_af = 0.0
+            if len(group1) == 1 and len(group2) == 1:
+                # Individual chains - try to get from iptm_dict
+                single_c1, single_c2 = group1[0], group2[0]
+                if single_c1 in pae_data.iptm_dict and single_c2 in pae_data.iptm_dict.get(
+                    single_c1, {}
+                ):
+                    iptm_af = pae_data.iptm_dict[single_c1][single_c2]
+            if iptm_af == 0.0 and pae_data.iptm != -1.0:
+                iptm_af = pae_data.iptm  # Fallback to global
+
+            summary_result = ChainPairScoreResults(
+                Chn1=g1,
+                Chn2=g2,
+                PAE=pae_cutoff,
+                Dist=dist_cutoff,
+                Type="asym",
+                ipSAE=float(ipsae_res_val),
+                ipSAE_d0chn=float(ipsae_chn_val),
+                ipSAE_d0dom=float(ipsae_dom_val),
+                ipTM_af=float(iptm_af),
+                ipTM_d0chn=float(iptm_chn_val),
+                pDockQ=float(pDockQ[g1][g2]),
+                pDockQ2=float(pDockQ2[g1][g2]),
+                LIS=float(LIS[g1][g2]),
+                n0res=int(n0res_val),
+                n0chn=int(n0chn[g1][g2]),
+                n0dom=int(n0dom[g1][g2]),
+                d0res=float(d0res_val),
+                d0chn=float(d0chn[g1][g2]),
+                d0dom=float(d0dom[g1][g2]),
+                nres1=res1_cnt,
+                nres2=res2_cnt,
+                dist1=dist1_cnt,
+                dist2=dist2_cnt,
+                Model=label,
+            )
+            chain_pair_scores.append(summary_result)
+            pymol_lines.append("# " + summary_result.to_formatted_line(end="\n"))
+
+            # Store in results dict
+            results_metrics[f"{g1}_{g2}"] = {
+                "ipsae": float(ipsae_res_val),
+                "iptm": float(iptm_af),
+                "pdockq": float(pDockQ[g1][g2]),
+                "pdockq2": float(pDockQ2[g1][g2]),
+                "lis": float(LIS[g1][g2]),
+            }
+
+            # PyMOL script generation - handle multi-chain groups
+            # Use '-' instead of '+' in alias names for compatibility
+            pymol_g1 = g1.replace("+", "-")
+            pymol_g2 = g2.replace("+", "-")
+            chain_pair_name = f"color_{pymol_g1}_{pymol_g2}"
+
+            # Ranges
+            r1_ranges = contiguous_ranges(unique_residues_chain1[g1][g2])
+            r2_ranges = contiguous_ranges(unique_residues_chain2[g1][g2])
+
+            # Build color commands for each chain in the groups
+            color_cmds = ["color gray80, all"]
+            for chain_id in group1:
+                color = CHAIN_COLOR.get(chain_id, "magenta")
+                if r1_ranges:
+                    color_cmds.append(
+                        f"color {color}, chain {chain_id} and resi {r1_ranges}"
+                    )
+            for chain_id in group2:
+                color = CHAIN_COLOR.get(chain_id, "marine")
+                if r2_ranges:
+                    color_cmds.append(
+                        f"color {color}, chain {chain_id} and resi {r2_ranges}"
+                    )
+
+            pymol_lines.append(f"alias {chain_pair_name}, {'; '.join(color_cmds)}\n\n")
+
+        # Now add the max row for this unique pair
+        # Original code uses larger chain first (c1 > c2), then outputs (c2, c1)
+        # We already have g_a < g_b alphabetically sorted
+        # So to match: use g_b (larger) as g1, g_a (smaller) as g2
+        g1, g2 = g_b, g_a
 
         # Calculate max values
-        def get_max_of_pair(arr, k1, k2):
-            v1, _, i1 = get_max_info(arr, k1, k2)
-            v2, _, i2 = get_max_info(arr, k2, k1)
-            if v1 >= v2:
-                return v1, i1, k1, k2
-            return v2, i2, k2, k1
-
         ipsae_res_max, idx_res, mk1_res, mk2_res = get_max_of_pair(
             ipsae_d0res_byres, g1, g2
         )
@@ -1389,6 +1388,7 @@ def aggregate_byres_scores(
             len(dist_unique_residues_chain2[g2][g1]),
         )
 
+        # Output with swapped chain names (Chn1=g2, Chn2=g1) to match original
         summary_result = ChainPairScoreResults(
             Chn1=g2,
             Chn2=g1,
@@ -1416,7 +1416,7 @@ def aggregate_byres_scores(
             Model=label,
         )
         chain_pair_scores.append(summary_result)
-        pymol_lines.append("# " + summary_result.to_formatted_line(end="\n"))
+        pymol_lines.append("# " + summary_result.to_formatted_line(end="\n") + "\n")
 
     return chain_pair_scores, pymol_lines, results_metrics
 
@@ -1740,6 +1740,9 @@ def write_outputs(results: ScoreResults, output_prefix: str | Path) -> None:
             line_str = summary.to_formatted_line()
             if line_str not in existing_chain_pair_lines:
                 f.write(f"{line_str}\n")
+                # Add blank line after max rows to separate chain pair groups
+                if summary.Type == "max":
+                    f.write("\n")
 
     # For per-residue scores and PyMOL scripts, overwrite each time
     with Path(f"{output_prefix}_byres.txt").open("w") as f:
