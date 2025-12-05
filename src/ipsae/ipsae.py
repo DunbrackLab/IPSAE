@@ -7,6 +7,7 @@ Changes by @y1zhou
 - Refactored the script into functions for better modularity.
 - Vectorized calculations where possible for performance improvements.
 - Supported specifying model type from command line arguments.
+- Supported calculating scores for specified chain groups.
 
 If you have uv installed, you can run the script with:
 
@@ -694,23 +695,6 @@ def init_chainpairdict_zeros(chainlist, zero=0):
     return {c1: {c2: zero for c2 in chainlist if c1 != c2} for c1 in chainlist}
 
 
-def init_chainpairdict_npzeros(
-    chainlist: list[str] | np.ndarray, arraysize: int
-) -> dict[str, dict[str, np.ndarray]]:
-    """Initialize a nested dictionary for chain pairs with numpy arrays of zeros."""
-    return {
-        c1: {c2: np.zeros(arraysize) for c2 in chainlist if c1 != c2}
-        for c1 in chainlist
-    }
-
-
-def init_chainpairdict_set(
-    chainlist: list[str] | np.ndarray,
-) -> dict[str, dict[str, set]]:
-    """Initialize a nested dictionary for chain pairs with empty sets."""
-    return {c1: {c2: set() for c2 in chainlist if c1 != c2} for c1 in chainlist}
-
-
 def classify_chains(chains: np.ndarray, residue_types: np.ndarray) -> dict[str, str]:
     """Classify chains as 'protein' or 'nucleic_acid' based on residue types for d0 calculation.
 
@@ -1181,7 +1165,7 @@ def aggregate_byres_scores(
     n0dom: dict[str, dict[str, int]],
     d0chn: dict[str, dict[str, float]],
     d0dom: dict[str, dict[str, float]],
-    pdb_stem: str,
+    label: str,
 ) -> tuple[list[ChainPairScoreResults], list[str], dict[str, dict[str, float]]]:
     """Aggregate per-residue scores into chain-pair-specific scores.
 
@@ -1286,7 +1270,7 @@ def aggregate_byres_scores(
             nres2=res2_cnt,
             dist1=dist1_cnt,
             dist2=dist2_cnt,
-            Model=pdb_stem,
+            Model=label,
         )
         chain_pair_scores.append(summary_result)
         pymol_lines.append("# " + summary_result.to_formatted_line(end="\n"))
@@ -1412,7 +1396,7 @@ def aggregate_byres_scores(
             nres2=res2_max,
             dist1=dist1_max,
             dist2=dist2_max,
-            Model=pdb_stem,
+            Model=label,
         )
         chain_pair_scores.append(summary_result)
         pymol_lines.append("# " + summary_result.to_formatted_line(end="\n"))
@@ -1425,7 +1409,7 @@ def calculate_scores(
     pae_data: PAEData,
     pae_cutoff: float = 10.0,
     dist_cutoff: float = 10.0,
-    pdb_stem: str = "model",
+    label: str = "model",
     chain_groups: list[tuple[list[str], list[str]]] | None = None,
 ) -> ScoreResults:
     """Calculate chain-pair-specific ipSAE, ipTM, pDockQ, pDockQ2, and LIS scores.
@@ -1464,7 +1448,7 @@ def calculate_scores(
         pae_data: Loaded PAE and pLDDT data.
         pae_cutoff: Cutoff for PAE to consider a residue pair "good" (default: 10.0).
         dist_cutoff: Distance cutoff for contact definition (default: 10.0).
-        pdb_stem: Stem of the PDB filename (for output labeling).
+        label: Filename prefix (for output labeling).
         chain_groups: Optional list of chain group pairs to calculate scores for.
             If None, all chain pairs are calculated.
 
@@ -1696,7 +1680,7 @@ def calculate_scores(
         n0dom,
         d0chn,
         d0dom,
-        pdb_stem,
+        label,
     )
 
     return ScoreResults(
