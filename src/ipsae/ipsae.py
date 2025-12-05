@@ -250,8 +250,8 @@ class PerResScoreResults:
         c1, c2 = self.AlignChn, self.ScoredChn
         return (
             f"{self.i:<4d}    "
-            f"{c1:4}      "
-            f"{c2:4}      "
+            f"{c1:<10}"
+            f"{c2:<10}"
             f"{self.AlignResNum:4d}           "
             f"{self.AlignResType:3}        "
             f"{self.AlignRespLDDT:8.2f}         "
@@ -333,8 +333,9 @@ class ChainPairScoreResults:
         """Format the summary result as a fixed-width string."""
         pae_str = str(int(self.PAE)).zfill(2)
         dist_str = str(int(self.Dist)).zfill(2)
+
         return (
-            f"{self.Chn1}    {self.Chn2}     {pae_str:3}  {dist_str:3}  {self.Type:5} "
+            f"{self.Chn1:<5}{self.Chn2:<6}{pae_str:3}  {dist_str:3}  {self.Type:5} "
             f"{self.ipSAE:8.6f}    "
             f"{self.ipSAE_d0chn:8.6f}    "
             f"{self.ipSAE_d0dom:8.6f}    "
@@ -1195,10 +1196,9 @@ def aggregate_byres_scores(
 
     chain_pair_scores: list[ChainPairScoreResults] = []
 
-    pymol_lines = []
-    pymol_lines.append(
+    pymol_lines = [
         "# Chn1 Chn2  PAE Dist  Type   ipSAE    ipSAE_d0chn ipSAE_d0dom  ipTM_af  ipTM_d0chn     pDockQ     pDockQ2    LIS      n0res  n0chn  n0dom   d0res   d0chn   d0dom  nres1   nres2   dist1   dist2  Model\n"
-    )
+    ]
 
     # Helper to get max info
     def get_max_info(values_array, c1, c2):
@@ -1740,10 +1740,6 @@ def write_outputs(results: ScoreResults, output_prefix: str | Path) -> None:
             if line_str not in existing_chain_pair_lines:
                 f.write(f"{line_str}\n")
 
-                # Add newline after "max" line (end of each chain pair group)
-                if summary.Type == "max":
-                    f.write("\n")
-
     # For per-residue scores and PyMOL scripts, overwrite each time
     with Path(f"{output_prefix}_byres.txt").open("w") as f:
         f.write(PerResScoreResults.header_line())
@@ -1935,8 +1931,8 @@ def main():
         print("\n\n" + "#" * 90 + "\n# Summary\n" + "#" * 90)
         print("\n" + ChainPairScoreResults.header_line(), end="")
         for summary in scores.chain_pair_scores:
-            line_end = "\n" if summary.Type == "max" else ""
-            print(summary.to_formatted_line(end="\n"), end=line_end)
+            # line_end = "\n" if summary.Type == "max" else ""
+            print(summary.to_formatted_line(end="\n"), end="")
 
         print("\n\n" + "#" * 90 + "\n# PyMOL script\n" + "#" * 90)
         print("".join(scores.pymol_script))
