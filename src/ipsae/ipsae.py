@@ -56,6 +56,7 @@ import logging
 import math
 import os
 from dataclasses import dataclass
+from itertools import combinations
 from pathlib import Path
 from typing import overload
 
@@ -559,7 +560,7 @@ def parse_chain_groups(
         Duplicates are automatically removed.
     """
     result = []
-    seen = set()  # Track seen pairs to remove duplicates
+    seen: set[str] = set()  # Track seen pairs to remove duplicates
     has_ellipsis = False
 
     pairs = chain_groups_str.split(",")
@@ -583,18 +584,19 @@ def parse_chain_groups(
                 f"Invalid chain group pair format: '{pair}'. Expected exactly one '/' separator."
             )
         group1_str, group2_str = parts
-        group1 = tuple(sorted([c.strip() for c in group1_str.split("+") if c.strip()]))
-        group2 = tuple(sorted([c.strip() for c in group2_str.split("+") if c.strip()]))
+        group1 = sorted(g for c in group1_str.split("+") if (g := c.strip()))
+        group2 = sorted(g for c in group2_str.split("+") if (g := c.strip()))
         if not group1 or not group2:
             raise ValueError(
                 f"Invalid chain group pair: '{pair}'. Both groups must contain at least one chain."
             )
 
         # Add to result if not a duplicate
-        pair_key = (group1, group2)
+        pair_key = f"{chain_group_name(group1)}/{chain_group_name(group2)}"
         if pair_key not in seen:
             seen.add(pair_key)
-            result.append((list(group1), list(group2)))
+            result.append((group1, group2))
+            result.append((group2, group1))
 
     # Handle ellipsis - add all individual chain permutations
     if has_ellipsis:
@@ -603,13 +605,13 @@ def parse_chain_groups(
                 "Cannot use '...' without providing unique_chains. "
                 "The '...' token requires knowledge of available chains."
             )
-        for c1 in unique_chains:
-            for c2 in unique_chains:
-                if c1 != c2:
-                    pair_key = ((c1,), (c2,))
-                    if pair_key not in seen:
-                        seen.add(pair_key)
-                        result.append(([c1], [c2]))
+
+        for c1, c2 in combinations(unique_chains, 2):
+            pair_key = f"{c1}/{c2}"
+            if pair_key not in seen:
+                seen.add(pair_key)
+                result.append(([c1], [c2]))
+                result.append(([c2], [c1]))
 
     return result
 
@@ -638,40 +640,6 @@ def chain_group_name(chain_group: list[str]) -> str:
         String representation of the chain group (e.g., "H+L" for ["H", "L"]).
     """
     return "+".join(chain_group)
-
-
-def generate_chain_pairs(
-    unique_chains: np.ndarray,
-    chain_groups: list[tuple[list[str], list[str]]] | None = None,
-) -> list[tuple[list[str], list[str]]]:
-    """Generate chain pairs for scoring.
-
-    When chain_groups is None, generates all permutations of individual chains.
-    When chain_groups is provided, generates permutations from the specified groups.
-
-    Args:
-        unique_chains: Array of unique chain identifiers in the structure.
-        chain_groups: Optional list of chain group pairs specified by user.
-
-    Returns:
-        List of (group1, group2) tuples where each group is a list of chain IDs.
-    """
-    if chain_groups is not None:
-        # Generate permutations for each specified group pair
-        result = []
-        for group1, group2 in chain_groups:
-            # Add both directions
-            result.append((group1, group2))
-            result.append((group2, group1))
-        return result
-    else:
-        # Default: all permutations of individual chains
-        result = []
-        for c1 in unique_chains:
-            for c2 in unique_chains:
-                if c1 != c2:
-                    result.append(([c1], [c2]))
-        return result
 
 
 def contiguous_ranges(numbers: set[int]) -> str | None:
@@ -855,7 +823,7 @@ def load_structure(struct_path: Path) -> StructureData:
     numres = len(residues)
     coordinates = np.array([r.coor for r in cb_residues])
     chains = np.array(chains_list)
-    unique_chains = np.unique(chains)  # TODO: does the order matter?
+    unique_chains = np.unique(chains)
     token_array = np.array(token_mask)
     residue_types = np.array([r.res for r in residues])
 
@@ -1241,25 +1209,22 @@ def aggregate_byres_scores(
         idx = np.argmax(vals)
         return vals[idx], residues[idx].residue_str, idx
 
-    # Build unique chain pairs set (for "max" output)
-    # chain_pairs contains both directions, so we need to find unique unordered pairs
-    unique_pair_set = set()
+    # Process each chain pair direction
+    unique_pair_set: set[tuple[str, str]] = set()
+    processed_pairs: set[tuple[str, str]] = set()
     for group1, group2 in chain_pairs:
+        # Build unique chain pairs set (for "max" output)
+        # chain_pairs contains both directions, so we need to find unique unordered pairs
         g1 = chain_group_name(group1)
         g2 = chain_group_name(group2)
-        pair_key = tuple(sorted([g1, g2]))
+        group_name: tuple[str, str] = (g1, g2)
+        pair_key: tuple[str, str] = tuple(sorted(group_name))
         unique_pair_set.add(pair_key)
 
-    # Process each chain pair direction
-    processed_pairs = set()
-    for group1, group2 in chain_pairs:
-        g1 = chain_group_name(group1)
-        g2 = chain_group_name(group2)
-
         # Skip if this exact pair already processed
-        if (g1, g2) in processed_pairs:
+        if group_name in processed_pairs:
             continue
-        processed_pairs.add((g1, g2))
+        processed_pairs.add(group_name)
 
         # Skip if g1 == g2 (shouldn't happen but safety check)
         if g1 == g2:
@@ -1513,10 +1478,11 @@ def calculate_scores(
     pae_matrix = pae_data.pae_matrix
     cb_plddt = pae_data.cb_plddt
 
-    # Generate chain pairs for iteration
-    chain_pairs = generate_chain_pairs(unique_chains, chain_groups)
-
     # Get unique chain group names for dictionary keys
+    if chain_groups is None:
+        chain_pairs = parse_chain_groups("...", unique_chains)
+    else:
+        chain_pairs = chain_groups
     chain_group_names = list(
         {chain_group_name(g) for pair in chain_pairs for g in pair}
     )
@@ -1799,7 +1765,7 @@ class CliArgs:
     dist_cutoff: float
     model_type: str
     output_dir: Path | None
-    chain_groups_str: str | None
+    chain_groups: str | None
 
 
 def parse_cli_args() -> CliArgs:
@@ -1884,7 +1850,7 @@ def parse_cli_args() -> CliArgs:
         dist_cutoff=input_args.dist_cutoff,
         model_type=model_type,
         output_dir=out_dir,
-        chain_groups_str=input_args.chain_groups,
+        chain_groups=input_args.chain_groups,
     )
 
 
@@ -1894,8 +1860,7 @@ def ipsae(
     pae_cutoff: float,
     dist_cutoff: float,
     model_type: str,
-    chain_groups: list[tuple[list[str], list[str]]] | None = None,
-    chain_groups_str: str | None = None,
+    chain_groups: str | None = None,
 ) -> ScoreResults:
     """Calculate ipSAE, pDockQ, pDockQ2, and LIS scores for protein structure models.
 
@@ -1905,11 +1870,10 @@ def ipsae(
         pae_cutoff: Cutoff for PAE to consider a residue pair "good".
         dist_cutoff: Distance cutoff for contact definition.
         model_type: Type of the model: af2, af3, boltz1.
-        chain_groups: Optional list of chain group pairs to calculate scores for.
-            If None, all chain pairs are calculated.
-        chain_groups_str: Optional string to parse chain groups from. If provided,
+        chain_groups: Optional string to parse chain groups from. If provided,
             this takes precedence over chain_groups. Use "..." to include all
-            default individual chain permutations.
+            default individual chain permutations. Default is None, which behaves
+            the same as passing "...".
 
     Returns:
         A ScoreResults object containing all calculated scores and output strings.
@@ -1920,15 +1884,14 @@ def ipsae(
     pae_data = load_pae_data(pae_file, structure_data, model_type)
 
     # Parse chain groups if string is provided
-    if chain_groups_str is not None:
-        chain_groups = parse_chain_groups(
-            chain_groups_str, structure_data.unique_chains
-        )
+    if chain_groups is None:
+        chain_groups = "..."
+    parsed_chain_groups = parse_chain_groups(chain_groups, structure_data.unique_chains)
 
     # Calculate scores and dump to files
     pdb_stem = structure_file.stem
     results = calculate_scores(
-        structure_data, pae_data, pae_cutoff, dist_cutoff, pdb_stem, chain_groups
+        structure_data, pae_data, pae_cutoff, dist_cutoff, pdb_stem, parsed_chain_groups
     )
     return results
 
@@ -1941,15 +1904,15 @@ def main():
     args = parse_cli_args()
     logger.debug(f"Parsed CLI args: {args}")
     logger.info(f"Detected model type: {args.model_type}")
-    if args.chain_groups_str:
-        logger.info(f"Chain groups: {args.chain_groups_str}")
+    if args.chain_groups:
+        logger.info(f"Chain groups: {args.chain_groups}")
     scores = ipsae(
         pae_file=args.pae_file,
         structure_file=args.structure_file,
         pae_cutoff=args.pae_cutoff,
         dist_cutoff=args.dist_cutoff,
         model_type=args.model_type,
-        chain_groups_str=args.chain_groups_str,
+        chain_groups=args.chain_groups,
     )
 
     if args.output_dir is not None:
