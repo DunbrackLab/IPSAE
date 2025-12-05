@@ -24,6 +24,11 @@ def find_output_files(output_dir: Path, pae_cutoff: int, dist_cutoff: int):
     }
 
 
+def normalize_whitespace(s: str) -> str:
+    """Normalize whitespace in a string for comparison."""
+    return " ".join(s.split())
+
+
 class TestScoringOutputAF2:
     """Integration tests comparing output against AF2 sample files."""
 
@@ -194,14 +199,14 @@ class TestScoringOutputAF2:
             output_pml = outputs["pml"]
             assert output_pml is not None, f"Output .pml file not found in {output_dir}"
 
-            # Normalize whitespace for comparison (expected files may have extra spaces)
-            def normalize(s):
-                return " ".join(s.split())
-
             with open(output_pml) as f:
-                actual_lines = sorted(normalize(line) for line in f if line.strip())
+                actual_lines = sorted(
+                    normalize_whitespace(line) for line in f if line.strip()
+                )
             with open(af2_files["expected_pml"]) as f:
-                expected_lines = sorted(normalize(line) for line in f if line.strip())
+                expected_lines = sorted(
+                    normalize_whitespace(line) for line in f if line.strip()
+                )
 
             assert actual_lines == expected_lines, (
                 "PML content mismatch (sorted comparison)"
@@ -359,14 +364,14 @@ class TestScoringOutputAF3:
             output_pml = outputs["pml"]
             assert output_pml is not None, f"Output .pml file not found in {output_dir}"
 
-            # Normalize whitespace for comparison (expected files may have extra spaces)
-            def normalize(s):
-                return " ".join(s.split())
-
             with open(output_pml) as f:
-                actual_lines = sorted(normalize(line) for line in f if line.strip())
+                actual_lines = sorted(
+                    normalize_whitespace(line) for line in f if line.strip()
+                )
             with open(af3_files["expected_pml"]) as f:
-                expected_lines = sorted(normalize(line) for line in f if line.strip())
+                expected_lines = sorted(
+                    normalize_whitespace(line) for line in f if line.strip()
+                )
 
             assert actual_lines == expected_lines, (
                 "PML content mismatch (sorted comparison)"
