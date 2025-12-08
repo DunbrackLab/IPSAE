@@ -7,6 +7,7 @@ Changes by @y1zhou
 - Refactored the script into functions for better modularity.
 - Vectorized calculations where possible for performance improvements.
 - Supported specifying model type from command line arguments.
+- Supported calculating scores for specified chain groups.
 
 If you have uv installed, you can run the script with:
 
@@ -248,9 +249,9 @@ class PerResScoreResults:
         """Format the per-residue score results as a fixed-width string."""
         c1, c2 = self.AlignChn, self.ScoredChn
         return (
-            f"{self.i:<4d}    "
-            f"{c1:4}      "
-            f"{c2:4}      "
+            f"{self.i:<8d}"
+            f"{c1:<10}"
+            f"{c2:<10}"
             f"{self.AlignResNum:4d}           "
             f"{self.AlignResType:3}        "
             f"{self.AlignRespLDDT:8.2f}         "
@@ -332,8 +333,9 @@ class ChainPairScoreResults:
         """Format the summary result as a fixed-width string."""
         pae_str = str(int(self.PAE)).zfill(2)
         dist_str = str(int(self.Dist)).zfill(2)
+
         return (
-            f"{self.Chn1}    {self.Chn2}     {pae_str:3}  {dist_str:3}  {self.Type:5} "
+            f"{self.Chn1:<5}{self.Chn2:<5} {pae_str:3}  {dist_str:3}  {self.Type:5} "
             f"{self.ipSAE:8.6f}    "
             f"{self.ipSAE_d0chn:8.6f}    "
             f"{self.ipSAE_d0dom:8.6f}    "
@@ -532,6 +534,121 @@ def parse_cif_atom_line(line: str, fielddict: dict[str, int]) -> dict | None:
         }
 
 
+def parse_chain_groups(
+    chain_groups_str: str,
+    unique_chains: np.ndarray | None = None,
+) -> list[tuple[list[str], list[str]]]:
+    """Parse chain groups string into a list of chain group pairs.
+
+    Format: "A/H+L,A/H,A/L" means:
+        - Calculate scores between chain A and chains H+L (treated as one group)
+        - Calculate scores between chain A and chain H
+        - Calculate scores between chain A and chain L
+
+    Use "..." to include all default individual chain permutations.
+    For example, "A/H+L,..." with chains A, H, L will include A/H+L plus all
+    individual chain pairs (A/H, A/L, H/A, H/L, L/A, L/H).
+
+    Args:
+        chain_groups_str: Comma-separated chain group pairs in format "group1/group2".
+            Each group can contain multiple chains joined with "+", e.g., "H+L".
+            Use "..." to include all default individual chain permutations.
+        unique_chains: Array of unique chain identifiers, required when using "...".
+
+    Returns:
+        List of tuples, where each tuple contains two lists of chain identifiers.
+        For example, "A/H+L,A/H" returns [(['A'], ['H', 'L']), (['A'], ['H'])].
+        Duplicates are automatically removed.
+    """
+    result = []
+    seen: set[str] = set()  # Track seen pairs to remove duplicates
+    has_ellipsis = False
+
+    pairs = chain_groups_str.split(",")
+    for pair in pairs:
+        pair = pair.strip()
+        if not pair:
+            continue
+
+        # Check for ellipsis token
+        if pair == "...":
+            has_ellipsis = True
+            continue
+
+        if "/" not in pair:
+            raise ValueError(
+                f"Invalid chain group pair format: '{pair}'. Expected 'group1/group2'."
+            )
+        parts = pair.split("/")
+        if len(parts) != 2:
+            raise ValueError(
+                f"Invalid chain group pair format: '{pair}'. Expected exactly one '/' separator."
+            )
+        group1_str, group2_str = parts
+        group1 = sorted(g for c in group1_str.split("+") if (g := c.strip()))
+        group2 = sorted(g for c in group2_str.split("+") if (g := c.strip()))
+        if not group1 or not group2:
+            raise ValueError(
+                f"Invalid chain group pair: '{pair}'. Both groups must contain at least one chain."
+            )
+
+        # Add to result if not a duplicate (check both directions)
+        pair_key_forward = f"{chain_group_name(group1)}/{chain_group_name(group2)}"
+        pair_key_reverse = f"{chain_group_name(group2)}/{chain_group_name(group1)}"
+        if pair_key_forward not in seen:
+            seen.add(pair_key_forward)
+            seen.add(pair_key_reverse)  # Mark reverse as seen too
+            result.append((group1, group2))
+            result.append((group2, group1))
+
+    # Handle ellipsis - add all individual chain permutations
+    # Use nested loops to match original behavior ordering:
+    # For chains [A,B,C]: A->B, A->C, B->A, B->C, C->A, C->B
+    if has_ellipsis:
+        if unique_chains is None:
+            raise ValueError(
+                "Cannot use '...' without providing unique_chains. "
+                "The '...' token requires knowledge of available chains."
+            )
+
+        for c1 in unique_chains:
+            for c2 in unique_chains:
+                if c1 == c2:
+                    continue
+                pair_key = f"{c1}/{c2}"
+                if pair_key not in seen:
+                    seen.add(pair_key)
+                    result.append(([c1], [c2]))
+
+    return result
+
+
+def get_chain_group_indices(chains: np.ndarray, chain_group: list[str]) -> np.ndarray:
+    """Get indices of residues belonging to any chain in the given chain group.
+
+    Args:
+        chains: Array of chain identifiers for each residue.
+        chain_group: List of chain identifiers forming the group.
+
+    Returns:
+        Array of indices for residues in the chain group.
+    """
+    mask = np.isin(chains, chain_group)
+    return np.where(mask)[0]
+
+
+def chain_group_name(chain_group: list[str]) -> str:
+    """Generate a display name for a chain group.
+
+    Args:
+        chain_group: List of chain identifiers.
+
+    Returns:
+        String representation of the chain group (e.g., "H+L" for ["H", "L"]).
+    """
+    return "+".join(chain_group)
+
+
 def contiguous_ranges(numbers: set[int]) -> str | None:
     """Format a set of numbers into a string of contiguous ranges.
 
@@ -581,23 +698,6 @@ def init_chainpairdict_zeros(
 def init_chainpairdict_zeros(chainlist, zero=0):
     """Initialize a nested dictionary for chain pairs with zero values."""
     return {c1: {c2: zero for c2 in chainlist if c1 != c2} for c1 in chainlist}
-
-
-def init_chainpairdict_npzeros(
-    chainlist: list[str] | np.ndarray, arraysize: int
-) -> dict[str, dict[str, np.ndarray]]:
-    """Initialize a nested dictionary for chain pairs with numpy arrays of zeros."""
-    return {
-        c1: {c2: np.zeros(arraysize) for c2 in chainlist if c1 != c2}
-        for c1 in chainlist
-    }
-
-
-def init_chainpairdict_set(
-    chainlist: list[str] | np.ndarray,
-) -> dict[str, dict[str, set]]:
-    """Initialize a nested dictionary for chain pairs with empty sets."""
-    return {c1: {c2: set() for c2 in chainlist if c1 != c2} for c1 in chainlist}
 
 
 def classify_chains(chains: np.ndarray, residue_types: np.ndarray) -> dict[str, str]:
@@ -713,7 +813,7 @@ def load_structure(struct_path: Path) -> StructureData:
     numres = len(residues)
     coordinates = np.array([r.coor for r in cb_residues])
     chains = np.array(chains_list)
-    unique_chains = np.unique(chains)  # TODO: does the order matter?
+    unique_chains = np.unique(chains)
     token_array = np.array(token_mask)
     residue_types = np.array([r.res for r in residues])
 
@@ -951,80 +1051,98 @@ def load_pae_data(
 
 def calculate_pdockq_scores(
     chains: np.ndarray,
-    unique_chains: np.ndarray,
+    chain_pairs: list[tuple[list[str], list[str]]],
     distances: np.ndarray,
     pae_matrix: np.ndarray,
     cb_plddt: np.ndarray,
     pdockq_dist_cutoff: float = 8.0,
 ):
-    """Calculate pDockQ and pDockQ2 scores for all chain pairs."""
-    pDockQ = init_chainpairdict_zeros(unique_chains, 0.0)
-    pDockQ2 = init_chainpairdict_zeros(unique_chains, 0.0)
-    for c1 in unique_chains:
-        for c2 in unique_chains:
-            if c1 == c2:
-                continue
+    """Calculate pDockQ and pDockQ2 scores for specified chain pairs."""
+    pDockQ: dict[str, dict[str, float]] = {}
+    pDockQ2: dict[str, dict[str, float]] = {}
 
-            # Vectorized approach for speed
-            c1_indices = np.where(chains == c1)[0]
-            c2_indices = np.where(chains == c2)[0]
+    for group1, group2 in chain_pairs:
+        g1 = chain_group_name(group1)
+        g2 = chain_group_name(group2)
 
-            if len(c1_indices) == 0 or len(c2_indices) == 0:
-                continue
+        # Initialize nested dict if needed
+        if g1 not in pDockQ:
+            pDockQ[g1] = {}
+            pDockQ2[g1] = {}
 
-            # Submatrix of distances
-            dists_sub = distances[np.ix_(c1_indices, c2_indices)]
-            valid_mask = dists_sub <= pdockq_dist_cutoff
-            npairs = np.sum(valid_mask)
+        # Get indices for chain groups
+        g1_indices = get_chain_group_indices(chains, group1)
+        g2_indices = get_chain_group_indices(chains, group2)
 
-            if npairs > 0:
-                # Identify interface residues on c1 and c2
-                # Any column in valid_mask with at least one True
-                c1_interface_mask = valid_mask.any(axis=1)
-                c1_interface_indices = c1_indices[c1_interface_mask]
-                c2_interface_mask = valid_mask.any(axis=0)
-                c2_interface_indices = c2_indices[c2_interface_mask]
+        if len(g1_indices) == 0 or len(g2_indices) == 0:
+            pDockQ[g1][g2] = 0.0
+            pDockQ2[g1][g2] = 0.0
+            continue
 
-                mean_plddt = cb_plddt[
-                    np.hstack([c1_interface_indices, c2_interface_indices])
-                ].mean()
-                x = mean_plddt * np.log10(npairs)
-                pDockQ[c1][c2] = 0.724 / (1 + np.exp(-0.052 * (x - 152.611))) + 0.018
+        # Submatrix of distances
+        dists_sub = distances[np.ix_(g1_indices, g2_indices)]
+        valid_mask = dists_sub <= pdockq_dist_cutoff
+        npairs = np.sum(valid_mask)
 
-                # Also find sub-matrix for pDockQ2 calculation
-                pae_sub = pae_matrix[np.ix_(c1_indices, c2_indices)]
-                pae_valid = pae_sub[valid_mask]
-                pae_ptm_sum = ptm_func_vec(pae_valid, 10.0).sum()
+        if npairs > 0:
+            # Identify interface residues on g1 and g2
+            # Any column in valid_mask with at least one True
+            g1_interface_mask = valid_mask.any(axis=1)
+            g1_interface_indices = g1_indices[g1_interface_mask]
+            g2_interface_mask = valid_mask.any(axis=0)
+            g2_interface_indices = g2_indices[g2_interface_mask]
 
-                mean_ptm = pae_ptm_sum / npairs
-                x = mean_plddt * mean_ptm
-                pDockQ2[c1][c2] = 1.31 / (1 + math.exp(-0.075 * (x - 84.733))) + 0.005
+            mean_plddt = cb_plddt[
+                np.hstack([g1_interface_indices, g2_interface_indices])
+            ].mean()
+            x = mean_plddt * np.log10(npairs)
+            pDockQ[g1][g2] = 0.724 / (1 + np.exp(-0.052 * (x - 152.611))) + 0.018
+
+            # Also find sub-matrix for pDockQ2 calculation
+            pae_sub = pae_matrix[np.ix_(g1_indices, g2_indices)]
+            pae_valid = pae_sub[valid_mask]
+            pae_ptm_sum = ptm_func_vec(pae_valid, 10.0).sum()
+
+            mean_ptm = pae_ptm_sum / npairs
+            x = mean_plddt * mean_ptm
+            pDockQ2[g1][g2] = 1.31 / (1 + math.exp(-0.075 * (x - 84.733))) + 0.005
+        else:
+            pDockQ[g1][g2] = 0.0
+            pDockQ2[g1][g2] = 0.0
 
     return pDockQ, pDockQ2
 
 
 def calculate_lis(
-    chains: np.ndarray, unique_chains: np.ndarray, pae_matrix: np.ndarray
+    chains: np.ndarray,
+    chain_pairs: list[tuple[list[str], list[str]]],
+    pae_matrix: np.ndarray,
 ):
-    """Calculate LIS scores for all chain pairs."""
-    LIS = init_chainpairdict_zeros(unique_chains, 0.0)
-    for c1 in unique_chains:
-        for c2 in unique_chains:
-            if c1 == c2:
-                continue
-            c1_indices = np.where(chains == c1)[0]
-            c2_indices = np.where(chains == c2)[0]
+    """Calculate LIS scores for specified chain pairs."""
+    LIS: dict[str, dict[str, float]] = {}
 
-            if len(c1_indices) == 0 or len(c2_indices) == 0:
-                continue
+    for group1, group2 in chain_pairs:
+        g1 = chain_group_name(group1)
+        g2 = chain_group_name(group2)
 
-            pae_sub = pae_matrix[np.ix_(c1_indices, c2_indices)]
-            valid_pae = pae_sub[pae_sub <= LIS_PAE_CUTOFF]
-            if valid_pae.size > 0:
-                scores = (LIS_PAE_CUTOFF - valid_pae) / LIS_PAE_CUTOFF
-                LIS[c1][c2] = np.mean(scores)
-            else:
-                LIS[c1][c2] = 0.0
+        # Initialize nested dict if needed
+        if g1 not in LIS:
+            LIS[g1] = {}
+
+        g1_indices = get_chain_group_indices(chains, group1)
+        g2_indices = get_chain_group_indices(chains, group2)
+
+        if len(g1_indices) == 0 or len(g2_indices) == 0:
+            LIS[g1][g2] = 0.0
+            continue
+
+        pae_sub = pae_matrix[np.ix_(g1_indices, g2_indices)]
+        valid_pae = pae_sub[pae_sub <= LIS_PAE_CUTOFF]
+        if valid_pae.size > 0:
+            scores = (LIS_PAE_CUTOFF - valid_pae) / LIS_PAE_CUTOFF
+            LIS[g1][g2] = np.mean(scores)
+        else:
+            LIS[g1][g2] = 0.0
 
     return LIS
 
@@ -1033,7 +1151,7 @@ def aggregate_byres_scores(
     residues: list[Residue],
     pae_cutoff: int | float,
     dist_cutoff: int | float,
-    unique_chains: np.ndarray,
+    chain_pairs: list[tuple[list[str], list[str]]],
     ipsae_d0res_byres: dict[str, dict[str, np.ndarray]],
     ipsae_d0chn_byres: dict[str, dict[str, np.ndarray]],
     ipsae_d0dom_byres: dict[str, dict[str, np.ndarray]],
@@ -1052,7 +1170,7 @@ def aggregate_byres_scores(
     n0dom: dict[str, dict[str, int]],
     d0chn: dict[str, dict[str, float]],
     d0dom: dict[str, dict[str, float]],
-    pdb_stem: str,
+    label: str,
 ) -> tuple[list[ChainPairScoreResults], list[str], dict[str, dict[str, float]]]:
     """Aggregate per-residue scores into chain-pair-specific scores.
 
@@ -1067,10 +1185,9 @@ def aggregate_byres_scores(
 
     chain_pair_scores: list[ChainPairScoreResults] = []
 
-    pymol_lines = []
-    pymol_lines.append(
+    pymol_lines = [
         "# Chn1 Chn2  PAE Dist  Type   ipSAE    ipSAE_d0chn ipSAE_d0dom  ipTM_af  ipTM_d0chn     pDockQ     pDockQ2    LIS      n0res  n0chn  n0dom   d0res   d0chn   d0dom  nres1   nres2   dist1   dist2  Model\n"
-    )
+    ]
 
     # Helper to get max info
     def get_max_info(values_array, c1, c2):
@@ -1081,45 +1198,78 @@ def aggregate_byres_scores(
         idx = np.argmax(vals)
         return vals[idx], residues[idx].residue_str, idx
 
-    chainpairs = set()
-    for c1 in unique_chains:
-        for c2 in unique_chains:
-            if c1 >= c2:
-                continue
-            chainpairs.add(f"{c1}-{c2}")
+    # Build a map from group names to chain lists
+    group_to_chains: dict[str, list[str]] = {}
+    for group1, group2 in chain_pairs:
+        g1 = chain_group_name(group1)
+        g2 = chain_group_name(group2)
+        group_to_chains[g1] = group1
+        group_to_chains[g2] = group2
 
-    # interchain ipTM and ipSAE for each chain pair
-    for pair in sorted(chainpairs):
-        c_a, c_b = pair.split("-")
+    # Identify all unique unordered pairs from chain_pairs
+    unique_pair_set: set[tuple[str, str]] = set()
+    for group1, group2 in chain_pairs:
+        g1 = chain_group_name(group1)
+        g2 = chain_group_name(group2)
+        if g1 != g2:
+            pair_key: tuple[str, str] = tuple(sorted((g1, g2)))
+            unique_pair_set.add(pair_key)
 
-        # Process both directions
-        for c1, c2 in [(c_a, c_b), (c_b, c_a)]:
+    # Helper to get max across both directions
+    def get_max_of_pair(arr, k1, k2):
+        v1, _, i1 = get_max_info(arr, k1, k2)
+        v2, _, i2 = get_max_info(arr, k2, k1)
+        if v1 >= v2:
+            return v1, i1, k1, k2
+        return v2, i2, k2, k1
+
+    # Process each unique pair: output both asym directions + max together
+    for pair_key in sorted(unique_pair_set):
+        g_a, g_b = pair_key  # Alphabetically sorted
+
+        # Check if data exists for both directions
+        if g_a not in ipsae_d0res_byres or g_b not in ipsae_d0res_byres.get(g_a, {}):
+            continue
+        if g_b not in ipsae_d0res_byres or g_a not in ipsae_d0res_byres.get(g_b, {}):
+            continue
+
+        # Process both asym directions: g_a -> g_b, then g_b -> g_a
+        for g1, g2 in [(g_a, g_b), (g_b, g_a)]:
+            group1 = group_to_chains[g1]
+            group2 = group_to_chains[g2]
+
             # Asym values
-            ipsae_res_val, _, ipsae_res_idx = get_max_info(ipsae_d0res_byres, c1, c2)
-            ipsae_chn_val, _, _ = get_max_info(ipsae_d0chn_byres, c1, c2)
-            ipsae_dom_val, _, _ = get_max_info(ipsae_d0dom_byres, c1, c2)
-            iptm_chn_val, _, _ = get_max_info(iptm_d0chn_byres, c1, c2)
+            ipsae_res_val, _, ipsae_res_idx = get_max_info(ipsae_d0res_byres, g1, g2)
+            ipsae_chn_val, _, _ = get_max_info(ipsae_d0chn_byres, g1, g2)
+            ipsae_dom_val, _, _ = get_max_info(ipsae_d0dom_byres, g1, g2)
+            iptm_chn_val, _, _ = get_max_info(iptm_d0chn_byres, g1, g2)
 
             # Get n0res/d0res at max index
-            n0res_val = n0res_byres[c1][c2][ipsae_res_idx]
-            d0res_val = d0res_byres[c1][c2][ipsae_res_idx]
+            n0res_val = n0res_byres[g1][g2][ipsae_res_idx]
+            d0res_val = d0res_byres[g1][g2][ipsae_res_idx]
 
             # Counts
-            res1_cnt = len(unique_residues_chain1[c1][c2])
-            res2_cnt = len(unique_residues_chain2[c1][c2])
-            dist1_cnt = len(dist_unique_residues_chain1[c1][c2])
-            dist2_cnt = len(dist_unique_residues_chain2[c1][c2])
+            res1_cnt = len(unique_residues_chain1[g1][g2])
+            res2_cnt = len(unique_residues_chain2[g1][g2])
+            dist1_cnt = len(dist_unique_residues_chain1[g1][g2])
+            dist2_cnt = len(dist_unique_residues_chain2[g1][g2])
 
-            # ipTM AF
-            # In AF2, this is the same value for all chain pairs
-            # In AF3 and Boltz, this is chain-pair specific (symmetric)
-            iptm_af = pae_data.iptm_dict[c1][c2]
+            # ipTM AF - for chain groups, try individual chains first
+            iptm_af = 0.0
+            if len(group1) == 1 and len(group2) == 1:
+                # Individual chains - try to get from iptm_dict
+                single_c1, single_c2 = group1[0], group2[0]
+                if (
+                    single_c1 in pae_data.iptm_dict
+                    and single_c2 in pae_data.iptm_dict.get(single_c1, {})
+                ):
+                    iptm_af = pae_data.iptm_dict[single_c1][single_c2]
             if iptm_af == 0.0 and pae_data.iptm != -1.0:
-                iptm_af = pae_data.iptm  # Fallback to global if per-pair not found
+                iptm_af = pae_data.iptm  # Fallback to global
 
             summary_result = ChainPairScoreResults(
-                Chn1=c1,
-                Chn2=c2,
+                Chn1=g1,
+                Chn2=g2,
                 PAE=pae_cutoff,
                 Dist=dist_cutoff,
                 Type="asym",
@@ -1128,119 +1278,120 @@ def aggregate_byres_scores(
                 ipSAE_d0dom=float(ipsae_dom_val),
                 ipTM_af=float(iptm_af),
                 ipTM_d0chn=float(iptm_chn_val),
-                pDockQ=float(pDockQ[c1][c2]),
-                pDockQ2=float(pDockQ2[c1][c2]),
-                LIS=float(LIS[c1][c2]),
+                pDockQ=float(pDockQ[g1][g2]),
+                pDockQ2=float(pDockQ2[g1][g2]),
+                LIS=float(LIS[g1][g2]),
                 n0res=int(n0res_val),
-                n0chn=int(n0chn[c1][c2]),
-                n0dom=int(n0dom[c1][c2]),
+                n0chn=int(n0chn[g1][g2]),
+                n0dom=int(n0dom[g1][g2]),
                 d0res=float(d0res_val),
-                d0chn=float(d0chn[c1][c2]),
-                d0dom=float(d0dom[c1][c2]),
+                d0chn=float(d0chn[g1][g2]),
+                d0dom=float(d0dom[g1][g2]),
                 nres1=res1_cnt,
                 nres2=res2_cnt,
                 dist1=dist1_cnt,
                 dist2=dist2_cnt,
-                Model=pdb_stem,
+                Model=label,
             )
             chain_pair_scores.append(summary_result)
             pymol_lines.append("# " + summary_result.to_formatted_line(end="\n"))
 
             # Store in results dict
-            results_metrics[f"{c1}_{c2}"] = {
+            results_metrics[f"{g1}_{g2}"] = {
                 "ipsae": float(ipsae_res_val),
                 "iptm": float(iptm_af),
-                "pdockq": float(pDockQ[c1][c2]),
-                "pdockq2": float(pDockQ2[c1][c2]),
-                "lis": float(LIS[c1][c2]),
+                "pdockq": float(pDockQ[g1][g2]),
+                "pdockq2": float(pDockQ2[g1][g2]),
+                "lis": float(LIS[g1][g2]),
             }
 
-            # PyMOL script generation
-            color1 = CHAIN_COLOR.get(c1, "magenta")
-            color2 = CHAIN_COLOR.get(c2, "marine")
-            chain_pair_name = f"color_{c1}_{c2}"
+            # PyMOL script generation - handle multi-chain groups
+            # Use '-' instead of '+' in alias names for compatibility
+            pymol_g1 = g1.replace("+", "-")
+            pymol_g2 = g2.replace("+", "-")
+            chain_pair_name = f"color_{pymol_g1}_{pymol_g2}"
 
             # Ranges
-            r1_ranges = contiguous_ranges(unique_residues_chain1[c1][c2])
-            r2_ranges = contiguous_ranges(unique_residues_chain2[c1][c2])
+            r1_ranges = contiguous_ranges(unique_residues_chain1[g1][g2])
+            r2_ranges = contiguous_ranges(unique_residues_chain2[g1][g2])
 
-            pymol_lines.append(
-                f"alias {chain_pair_name}, color gray80, all; color {color1}, chain {c1} and resi {r1_ranges}; color {color2}, chain {c2} and resi {r2_ranges}\n\n"
-            )
+            # Build color commands for each chain in the groups
+            color_cmds = ["color gray80, all"]
+            for chain_id in group1:
+                color = CHAIN_COLOR.get(chain_id, "magenta")
+                if r1_ranges:
+                    color_cmds.append(
+                        f"color {color}, chain {chain_id} and resi {r1_ranges}"
+                    )
+            for chain_id in group2:
+                color = CHAIN_COLOR.get(chain_id, "marine")
+                if r2_ranges:
+                    color_cmds.append(
+                        f"color {color}, chain {chain_id} and resi {r2_ranges}"
+                    )
 
-        # Max values (symmetric)
-        # Logic: compare c1->c2 and c2->c1, take max
-        # For simplicity, I'll just re-calculate max here based on computed asyms
-        # But to match original output exactly, we need to output the 'max' line for c2->c1 where c1 > c2 (alphabetically)
-        # The original code outputs 'max' line only once per pair?
-        # "if chain1 > chain2:" block in original code implies it outputs max line once.
+            pymol_lines.append(f"alias {chain_pair_name}, {'; '.join(color_cmds)}\n\n")
 
-        c1, c2 = c_a, c_b
-        if c1 < c2:  # Ensure order for comparison
-            # Original code: if chain1 > chain2. So let's swap to match loop
-            c1, c2 = c_b, c_a
+        # Now add the max row for this unique pair
+        # Original code uses larger chain first (c1 > c2), then outputs (c2, c1)
+        # We already have g_a < g_b alphabetically sorted
+        # So to match: use g_b (larger) as g1, g_a (smaller) as g2
+        g1, g2 = g_b, g_a
 
-        # Now c1 > c2
         # Calculate max values
-        def get_max_of_pair(arr, k1, k2):
-            v1, _, i1 = get_max_info(arr, k1, k2)
-            v2, _, i2 = get_max_info(arr, k2, k1)
-            if v1 >= v2:
-                return v1, i1, k1, k2
-            return v2, i2, k2, k1
-
         ipsae_res_max, idx_res, mk1_res, mk2_res = get_max_of_pair(
-            ipsae_d0res_byres, c1, c2
+            ipsae_d0res_byres, g1, g2
         )
-        ipsae_chn_max, _, _, _ = get_max_of_pair(ipsae_d0chn_byres, c1, c2)
-        ipsae_dom_max, _, _, _ = get_max_of_pair(ipsae_d0dom_byres, c1, c2)
-        iptm_chn_max, _, _, _ = get_max_of_pair(iptm_d0chn_byres, c1, c2)
+        ipsae_chn_max, _, _, _ = get_max_of_pair(ipsae_d0chn_byres, g1, g2)
+        ipsae_dom_max, _, _, _ = get_max_of_pair(ipsae_d0dom_byres, g1, g2)
+        iptm_chn_max, _, _, _ = get_max_of_pair(iptm_d0chn_byres, g1, g2)
 
         # n0/d0 for max
         n0res_max = n0res_byres[mk1_res][mk2_res][idx_res]
         d0res_max = d0res_byres[mk1_res][mk2_res][idx_res]
 
-        # n0dom/d0dom for max (need to find which direction gave max ipsae_dom)
-        v1_dom, _, _ = get_max_info(ipsae_d0dom_byres, c1, c2)
-        v2_dom, _, _ = get_max_info(ipsae_d0dom_byres, c2, c1)
+        # n0dom/d0dom for max
+        v1_dom, _, _ = get_max_info(ipsae_d0dom_byres, g1, g2)
+        v2_dom, _, _ = get_max_info(ipsae_d0dom_byres, g2, g1)
         if v1_dom >= v2_dom:
-            n0dom_max = n0dom[c1][c2]
-            d0dom_max = d0dom[c1][c2]
+            n0dom_max = n0dom[g1][g2]
+            d0dom_max = d0dom[g1][g2]
         else:
-            n0dom_max = n0dom[c2][c1]
-            d0dom_max = d0dom[c2][c1]
+            n0dom_max = n0dom[g2][g1]
+            d0dom_max = d0dom[g2][g1]
 
-        # iptm af max
-        iptm_af_1 = pae_data.iptm_dict[c1][c2]
-        iptm_af_2 = pae_data.iptm_dict[c2][c1]
-        if iptm_af_1 == 0 and pae_data.iptm != -1:
+        # iptm af max - for individual chains, use iptm_dict; for groups, use global
+        iptm_af_1 = pae_data.iptm_dict.get(g1, {}).get(g2, 0.0)
+        iptm_af_2 = pae_data.iptm_dict.get(g2, {}).get(g1, 0.0)
+        if iptm_af_1 == 0 and pae_data.iptm != -1.0:
             iptm_af_1 = pae_data.iptm
-        if iptm_af_2 == 0 and pae_data.iptm != -1:
+        if iptm_af_2 == 0 and pae_data.iptm != -1.0:
             iptm_af_2 = pae_data.iptm
         iptm_af_max = max(iptm_af_1, iptm_af_2)
 
-        pdockq2_max = max(pDockQ2[c1][c2], pDockQ2[c2][c1])
-        lis_avg = (LIS[c1][c2] + LIS[c2][c1]) / 2.0
+        pdockq2_max = max(pDockQ2[g1][g2], pDockQ2[g2][g1])
+        lis_avg = (LIS[g1][g2] + LIS[g2][g1]) / 2.0
 
         # Residue counts (max of cross pairs)
         res1_max = max(
-            len(unique_residues_chain2[c1][c2]), len(unique_residues_chain1[c2][c1])
+            len(unique_residues_chain2[g1][g2]), len(unique_residues_chain1[g2][g1])
         )
         res2_max = max(
-            len(unique_residues_chain1[c1][c2]), len(unique_residues_chain2[c2][c1])
+            len(unique_residues_chain1[g1][g2]), len(unique_residues_chain2[g2][g1])
         )
         dist1_max = max(
-            len(dist_unique_residues_chain2[c1][c2]),
-            len(dist_unique_residues_chain1[c2][c1]),
+            len(dist_unique_residues_chain2[g1][g2]),
+            len(dist_unique_residues_chain1[g2][g1]),
         )
         dist2_max = max(
-            len(dist_unique_residues_chain1[c1][c2]),
-            len(dist_unique_residues_chain2[c2][c1]),
+            len(dist_unique_residues_chain1[g1][g2]),
+            len(dist_unique_residues_chain2[g2][g1]),
         )
 
+        # Output with swapped chain names (Chn1=g2, Chn2=g1) to match original
         summary_result = ChainPairScoreResults(
-            Chn1=c2,
-            Chn2=c1,
+            Chn1=g2,
+            Chn2=g1,
             PAE=pae_cutoff,
             Dist=dist_cutoff,
             Type="max",
@@ -1249,23 +1400,23 @@ def aggregate_byres_scores(
             ipSAE_d0dom=float(ipsae_dom_max),
             ipTM_af=float(iptm_af_max),
             ipTM_d0chn=float(iptm_chn_max),
-            pDockQ=float(pDockQ[c1][c2]),
+            pDockQ=float(pDockQ[g1][g2]),
             pDockQ2=float(pdockq2_max),
             LIS=float(lis_avg),
             n0res=int(n0res_max),
-            n0chn=int(n0chn[c1][c2]),
+            n0chn=int(n0chn[g1][g2]),
             n0dom=int(n0dom_max),
             d0res=float(d0res_max),
-            d0chn=float(d0chn[c1][c2]),
+            d0chn=float(d0chn[g1][g2]),
             d0dom=float(d0dom_max),
             nres1=res1_max,
             nres2=res2_max,
             dist1=dist1_max,
             dist2=dist2_max,
-            Model=pdb_stem,
+            Model=label,
         )
         chain_pair_scores.append(summary_result)
-        pymol_lines.append("# " + summary_result.to_formatted_line(end="\n"))
+        pymol_lines.append("# " + summary_result.to_formatted_line(end="\n") + "\n")
 
     return chain_pair_scores, pymol_lines, results_metrics
 
@@ -1275,7 +1426,8 @@ def calculate_scores(
     pae_data: PAEData,
     pae_cutoff: float = 10.0,
     dist_cutoff: float = 10.0,
-    pdb_stem: str = "model",
+    label: str = "model",
+    chain_groups: list[tuple[list[str], list[str]]] | None = None,
 ) -> ScoreResults:
     """Calculate chain-pair-specific ipSAE, ipTM, pDockQ, pDockQ2, and LIS scores.
 
@@ -1313,7 +1465,9 @@ def calculate_scores(
         pae_data: Loaded PAE and pLDDT data.
         pae_cutoff: Cutoff for PAE to consider a residue pair "good" (default: 10.0).
         dist_cutoff: Distance cutoff for contact definition (default: 10.0).
-        pdb_stem: Stem of the PDB filename (for output labeling).
+        label: Filename prefix (for output labeling).
+        chain_groups: Optional list of chain group pairs to calculate scores for.
+            If None, all chain pairs are calculated.
 
     Returns:
     -------
@@ -1325,149 +1479,196 @@ def calculate_scores(
     pae_matrix = pae_data.pae_matrix
     cb_plddt = pae_data.cb_plddt
 
+    # Get unique chain group names for dictionary keys
+    if chain_groups is None:
+        chain_pairs = parse_chain_groups("...", unique_chains)
+    else:
+        chain_pairs = chain_groups
+    chain_group_names = list(
+        {chain_group_name(g) for pair in chain_pairs for g in pair}
+    )
+
     # Calculate pDockQ and LIS scores
     pDockQ, pDockQ2 = calculate_pdockq_scores(
-        chains, unique_chains, distances, pae_matrix, cb_plddt
+        chains, chain_pairs, distances, pae_matrix, cb_plddt
     )
-    LIS = calculate_lis(chains, unique_chains, pae_matrix)
+    LIS = calculate_lis(chains, chain_pairs, pae_matrix)
 
     # --- ipTM / ipSAE ---
     residues = structure.residues
     plddt = pae_data.plddt
     numres = structure.numres
 
-    # Initialize containers
-    iptm_d0chn_byres = init_chainpairdict_npzeros(unique_chains, numres)
-    ipsae_d0chn_byres = init_chainpairdict_npzeros(unique_chains, numres)
-    ipsae_d0dom_byres = init_chainpairdict_npzeros(unique_chains, numres)
-    ipsae_d0res_byres = init_chainpairdict_npzeros(unique_chains, numres)
+    # Initialize containers using chain group names
+    def init_chainpair_dict_zeros(default_val):
+        return {
+            c1: {c2: default_val for c2 in chain_group_names if c1 != c2}
+            for c1 in chain_group_names
+        }
 
-    n0chn = init_chainpairdict_zeros(unique_chains, 0)
-    d0chn = init_chainpairdict_zeros(unique_chains, 0.0)
-    n0dom = init_chainpairdict_zeros(unique_chains, 0)
-    d0dom = init_chainpairdict_zeros(unique_chains, 0.0)
-    n0res_byres = init_chainpairdict_npzeros(unique_chains, numres)
-    d0res_byres = init_chainpairdict_npzeros(unique_chains, numres)
+    def init_chainpair_dict_npzeros():
+        return {
+            c1: {c2: np.zeros(numres) for c2 in chain_group_names if c1 != c2}
+            for c1 in chain_group_names
+        }
 
-    unique_residues_chain1 = init_chainpairdict_set(unique_chains)
-    unique_residues_chain2 = init_chainpairdict_set(unique_chains)
-    dist_unique_residues_chain1 = init_chainpairdict_set(unique_chains)
-    dist_unique_residues_chain2 = init_chainpairdict_set(unique_chains)
+    def init_chainpair_dict_set():
+        return {
+            c1: {c2: set() for c2 in chain_group_names if c1 != c2}
+            for c1 in chain_group_names
+        }
+
+    iptm_d0chn_byres = init_chainpair_dict_npzeros()
+    ipsae_d0chn_byres = init_chainpair_dict_npzeros()
+    ipsae_d0dom_byres = init_chainpair_dict_npzeros()
+    ipsae_d0res_byres = init_chainpair_dict_npzeros()
+
+    n0chn: dict[str, dict[str, int]] = init_chainpair_dict_zeros(0)
+    d0chn: dict[str, dict[str, float]] = init_chainpair_dict_zeros(0.0)
+    n0dom: dict[str, dict[str, int]] = init_chainpair_dict_zeros(0)
+    d0dom: dict[str, dict[str, float]] = init_chainpair_dict_zeros(0.0)
+    n0res_byres = init_chainpair_dict_npzeros()
+    d0res_byres = init_chainpair_dict_npzeros()
+
+    unique_residues_chain1 = init_chainpair_dict_set()
+    unique_residues_chain2 = init_chainpair_dict_set()
+    dist_unique_residues_chain1 = init_chainpair_dict_set()
+    dist_unique_residues_chain2 = init_chainpair_dict_set()
+
+    # Helper to determine pair type for a chain group pair
+    def get_pair_type(group1: list[str], group2: list[str]) -> str:
+        for c1 in group1:
+            for c2 in group2:
+                if (
+                    c1 in structure.chain_pair_type
+                    and c2 in structure.chain_pair_type.get(c1, {})
+                ):
+                    if structure.chain_pair_type[c1][c2] == "nucleic_acid":
+                        return "nucleic_acid"
+        return "protein"
 
     # First pass: d0chn
     # Calculate ipTM/ipSAE with and without PAE cutoff
-    for c1 in unique_chains:
-        for c2 in unique_chains:
-            if c1 == c2:
-                continue
+    for group1, group2 in chain_pairs:
+        g1 = chain_group_name(group1)
+        g2 = chain_group_name(group2)
 
-            c1_indices = np.where(chains == c1)[0]
-            c2_indices = np.where(chains == c2)[0]
+        g1_indices = get_chain_group_indices(chains, group1)
+        g2_indices = get_chain_group_indices(chains, group2)
 
-            n0chn[c1][c2] = len(c1_indices) + len(c2_indices)  # Total #res in chain1+2
-            d0chn[c1][c2] = calc_d0(n0chn[c1][c2], structure.chain_pair_type[c1][c2])
+        if len(g1_indices) == 0 or len(g2_indices) == 0:
+            continue
 
-            # Precompute PTM matrix for this d0
-            ptm_matrix_d0chn = ptm_func_vec(
-                pae_matrix[np.ix_(c1_indices, c2_indices)], d0chn[c1][c2]
-            )
+        pair_type = get_pair_type(group1, group2)
 
-            # ipTM uses all of chain 2, ipSAE uses PAE cutoff
-            iptm_d0chn_byres[c1][c2][c1_indices] = ptm_matrix_d0chn.mean(axis=1)
+        n0chn[g1][g2] = len(g1_indices) + len(g2_indices)  # Total #res in group1+2
+        d0chn[g1][g2] = calc_d0(n0chn[g1][g2], pair_type)
 
-            valid_pairs_mask = pae_matrix[np.ix_(c1_indices, c2_indices)] < pae_cutoff
-            ipsae_d0chn_byres[c1][c2][c1_indices] = np.ma.masked_where(
-                ~valid_pairs_mask, ptm_matrix_d0chn
-            ).mean(axis=1)
+        # Precompute PTM matrix for this d0
+        ptm_matrix_d0chn = ptm_func_vec(
+            pae_matrix[np.ix_(g1_indices, g2_indices)], d0chn[g1][g2]
+        )
 
-            # n0res and d0res by residue
-            n0res_byres[c1][c2][c1_indices] = valid_pairs_mask.sum(axis=1)
-            d0res_byres[c1][c2][c1_indices] = calc_d0_array(
-                n0res_byres[c1][c2][c1_indices], structure.chain_pair_type[c1][c2]
-            )
+        # ipTM uses all of group 2, ipSAE uses PAE cutoff
+        iptm_d0chn_byres[g1][g2][g1_indices] = ptm_matrix_d0chn.mean(axis=1)
 
-            # Track unique residues contributing to the ipSAE for c1,2
-            c1_contrib_residues = set(
-                residues[c1_indices[i]].resnum
-                for i in np.where(valid_pairs_mask.any(axis=1))[0]
-            )
-            unique_residues_chain1[c1][c2].update(c1_contrib_residues)
+        valid_pairs_mask = pae_matrix[np.ix_(g1_indices, g2_indices)] < pae_cutoff
+        ipsae_d0chn_byres[g1][g2][g1_indices] = np.ma.masked_where(
+            ~valid_pairs_mask, ptm_matrix_d0chn
+        ).mean(axis=1)
 
-            c2_contrib_residues = set(
-                residues[c2_indices[j]].resnum
-                for j in np.where(valid_pairs_mask.any(axis=0))[0]
-            )
-            unique_residues_chain2[c1][c2].update(c2_contrib_residues)
+        # n0res and d0res by residue
+        n0res_byres[g1][g2][g1_indices] = valid_pairs_mask.sum(axis=1)
+        d0res_byres[g1][g2][g1_indices] = calc_d0_array(
+            n0res_byres[g1][g2][g1_indices], pair_type
+        )
 
-            # Track unique residues contributing to ipTM in interface
-            c2_valid_dist_mask = (valid_pairs_mask) & (
-                distances[np.ix_(c1_indices, c2_indices)] < dist_cutoff
-            )
-            c1_dist_contrib_residues = set(
-                residues[c1_indices[i]].resnum
-                for i in np.where(c2_valid_dist_mask.any(axis=1))[0]
-            )
-            dist_unique_residues_chain1[c1][c2].update(c1_dist_contrib_residues)
+        # Track unique residues contributing to the ipSAE for g1, g2
+        g1_contrib_residues = set(
+            residues[g1_indices[i]].resnum
+            for i in np.where(valid_pairs_mask.any(axis=1))[0]
+        )
+        unique_residues_chain1[g1][g2].update(g1_contrib_residues)
 
-            c2_dist_contrib_residues = set(
-                residues[c2_indices[j]].resnum
-                for j in np.where(c2_valid_dist_mask.any(axis=0))[0]
-            )
-            dist_unique_residues_chain2[c1][c2].update(c2_dist_contrib_residues)
+        g2_contrib_residues = set(
+            residues[g2_indices[j]].resnum
+            for j in np.where(valid_pairs_mask.any(axis=0))[0]
+        )
+        unique_residues_chain2[g1][g2].update(g2_contrib_residues)
+
+        # Track unique residues contributing to ipTM in interface
+        valid_dist_mask = (valid_pairs_mask) & (
+            distances[np.ix_(g1_indices, g2_indices)] < dist_cutoff
+        )
+        g1_dist_contrib_residues = set(
+            residues[g1_indices[i]].resnum
+            for i in np.where(valid_dist_mask.any(axis=1))[0]
+        )
+        dist_unique_residues_chain1[g1][g2].update(g1_dist_contrib_residues)
+
+        g2_dist_contrib_residues = set(
+            residues[g2_indices[j]].resnum
+            for j in np.where(valid_dist_mask.any(axis=0))[0]
+        )
+        dist_unique_residues_chain2[g1][g2].update(g2_dist_contrib_residues)
 
     # Second pass: d0dom and d0res
     by_res_lines: list[PerResScoreResults] = []
-    for c1 in unique_chains:
-        for c2 in unique_chains:
-            if c1 == c2:
-                continue
+    for group1, group2 in chain_pairs:
+        g1 = chain_group_name(group1)
+        g2 = chain_group_name(group2)
 
-            c1_indices = np.where(chains == c1)[0]
-            c2_indices = np.where(chains == c2)[0]
+        g1_indices = get_chain_group_indices(chains, group1)
+        g2_indices = get_chain_group_indices(chains, group2)
 
-            n0dom[c1][c2] = len(unique_residues_chain1[c1][c2]) + len(
-                unique_residues_chain2[c1][c2]
-            )
-            d0dom[c1][c2] = calc_d0(n0dom[c1][c2], structure.chain_pair_type[c1][c2])
+        if len(g1_indices) == 0 or len(g2_indices) == 0:
+            continue
 
-            valid_pairs_mask = pae_matrix[np.ix_(c1_indices, c2_indices)] < pae_cutoff
-            ptm_matrix_d0dom = ptm_func_vec(
-                pae_matrix[np.ix_(c1_indices, c2_indices)], d0dom[c1][c2]
-            )
-            ipsae_d0dom_byres[c1][c2][c1_indices] = np.ma.masked_where(
-                ~valid_pairs_mask, ptm_matrix_d0dom
-            ).mean(axis=1)
+        pair_type = get_pair_type(group1, group2)
 
-            ptm_matrix_d0res = ptm_func_vec(
-                pae_matrix[np.ix_(c1_indices, c2_indices)],
-                d0res_byres[c1][c2][c1_indices][:, np.newaxis],
-            )
-            ipsae_d0res_byres[c1][c2][c1_indices] = np.ma.masked_where(
-                ~valid_pairs_mask, ptm_matrix_d0res
-            ).mean(axis=1)
+        n0dom[g1][g2] = len(unique_residues_chain1[g1][g2]) + len(
+            unique_residues_chain2[g1][g2]
+        )
+        d0dom[g1][g2] = calc_d0(n0dom[g1][g2], pair_type)
 
-            # Output line generation
-            for i in c1_indices:
-                by_res_lines.append(
-                    PerResScoreResults(
-                        i=int(i + 1),
-                        AlignChn=str(c1),
-                        ScoredChn=str(c2),
-                        AlignResNum=residues[i].resnum,
-                        AlignResType=residues[i].res,
-                        AlignRespLDDT=float(plddt[i]),
-                        n0chn=int(n0chn[c1][c2]),
-                        n0dom=int(n0dom[c1][c2]),
-                        n0res=int(n0res_byres[c1][c2][i]),
-                        d0chn=d0chn[c1][c2],
-                        d0dom=d0dom[c1][c2],
-                        d0res=float(d0res_byres[c1][c2][i]),
-                        pTM_pae=float(iptm_d0chn_byres[c1][c2][i]),
-                        pSAE_d0chn=float(ipsae_d0chn_byres[c1][c2][i]),
-                        pSAE_d0dom=float(ipsae_d0dom_byres[c1][c2][i]),
-                        pSAE=float(ipsae_d0res_byres[c1][c2][i]),
-                    )
+        valid_pairs_mask = pae_matrix[np.ix_(g1_indices, g2_indices)] < pae_cutoff
+        ptm_matrix_d0dom = ptm_func_vec(
+            pae_matrix[np.ix_(g1_indices, g2_indices)], d0dom[g1][g2]
+        )
+        ipsae_d0dom_byres[g1][g2][g1_indices] = np.ma.masked_where(
+            ~valid_pairs_mask, ptm_matrix_d0dom
+        ).mean(axis=1)
+
+        ptm_matrix_d0res = ptm_func_vec(
+            pae_matrix[np.ix_(g1_indices, g2_indices)],
+            d0res_byres[g1][g2][g1_indices][:, np.newaxis],
+        )
+        ipsae_d0res_byres[g1][g2][g1_indices] = np.ma.masked_where(
+            ~valid_pairs_mask, ptm_matrix_d0res
+        ).mean(axis=1)
+
+        # Output line generation
+        for i in g1_indices:
+            by_res_lines.append(
+                PerResScoreResults(
+                    i=int(i + 1),
+                    AlignChn=str(residues[i].chainid),
+                    ScoredChn=str(g2),
+                    AlignResNum=residues[i].resnum,
+                    AlignResType=residues[i].res,
+                    AlignRespLDDT=float(plddt[i]),
+                    n0chn=int(n0chn[g1][g2]),
+                    n0dom=int(n0dom[g1][g2]),
+                    n0res=int(n0res_byres[g1][g2][i]),
+                    d0chn=d0chn[g1][g2],
+                    d0dom=d0dom[g1][g2],
+                    d0res=float(d0res_byres[g1][g2][i]),
+                    pTM_pae=float(iptm_d0chn_byres[g1][g2][i]),
+                    pSAE_d0chn=float(ipsae_d0chn_byres[g1][g2][i]),
+                    pSAE_d0dom=float(ipsae_d0dom_byres[g1][g2][i]),
+                    pSAE=float(ipsae_d0res_byres[g1][g2][i]),
                 )
+            )
 
     # Aggregate results (Asym and Max)
     # We need to store these to generate the summary table
@@ -1477,7 +1678,7 @@ def calculate_scores(
         residues,
         pae_cutoff,
         dist_cutoff,
-        unique_chains,
+        chain_pairs,
         ipsae_d0res_byres,
         ipsae_d0chn_byres,
         ipsae_d0dom_byres,
@@ -1496,7 +1697,7 @@ def calculate_scores(
         n0dom,
         d0chn,
         d0dom,
-        pdb_stem,
+        label,
     )
 
     return ScoreResults(
@@ -1539,8 +1740,7 @@ def write_outputs(results: ScoreResults, output_prefix: str | Path) -> None:
             line_str = summary.to_formatted_line()
             if line_str not in existing_chain_pair_lines:
                 f.write(f"{line_str}\n")
-
-                # Add newline after "max" line (end of each chain pair group)
+                # Add blank line after max rows to separate chain pair groups
                 if summary.Type == "max":
                     f.write("\n")
 
@@ -1565,6 +1765,7 @@ class CliArgs:
     dist_cutoff: float
     model_type: str
     output_dir: Path | None
+    chain_groups: str | None
 
 
 def parse_cli_args() -> CliArgs:
@@ -1591,6 +1792,18 @@ def parse_cli_args() -> CliArgs:
         "--model-type",
         help="Model type: af2, af3, boltz1, boltz2 (auto-detected if not provided).",
         default="unknown",
+    )
+    parser.add_argument(
+        "-g",
+        "--chain-groups",
+        help=(
+            "Calculate scores between specified chain groups instead of all pairs. "
+            "Format: 'group1/group2,group1/group3,...' where groups can contain "
+            "multiple chains joined with '+'. Use '...' to include all default "
+            "individual chain permutations. Example: 'A/H+L,...' calculates "
+            "scores between chain A and chains H+L, plus all individual chain pairs."
+        ),
+        default=None,
     )
 
     input_args = parser.parse_args()
@@ -1637,6 +1850,7 @@ def parse_cli_args() -> CliArgs:
         dist_cutoff=input_args.dist_cutoff,
         model_type=model_type,
         output_dir=out_dir,
+        chain_groups=input_args.chain_groups,
     )
 
 
@@ -1646,6 +1860,7 @@ def ipsae(
     pae_cutoff: float,
     dist_cutoff: float,
     model_type: str,
+    chain_groups: str | None = None,
 ) -> ScoreResults:
     """Calculate ipSAE, pDockQ, pDockQ2, and LIS scores for protein structure models.
 
@@ -1655,6 +1870,10 @@ def ipsae(
         pae_cutoff: Cutoff for PAE to consider a residue pair "good".
         dist_cutoff: Distance cutoff for contact definition.
         model_type: Type of the model: af2, af3, boltz1.
+        chain_groups: Optional string to parse chain groups from. If provided,
+            this takes precedence over chain_groups. Use "..." to include all
+            default individual chain permutations. Default is None, which behaves
+            the same as passing "...".
 
     Returns:
         A ScoreResults object containing all calculated scores and output strings.
@@ -1664,10 +1883,15 @@ def ipsae(
     structure_data = load_structure(structure_file)
     pae_data = load_pae_data(pae_file, structure_data, model_type)
 
+    # Parse chain groups if string is provided
+    if chain_groups is None:
+        chain_groups = "..."
+    parsed_chain_groups = parse_chain_groups(chain_groups, structure_data.unique_chains)
+
     # Calculate scores and dump to files
     pdb_stem = structure_file.stem
     results = calculate_scores(
-        structure_data, pae_data, pae_cutoff, dist_cutoff, pdb_stem
+        structure_data, pae_data, pae_cutoff, dist_cutoff, pdb_stem, parsed_chain_groups
     )
     return results
 
@@ -1680,12 +1904,15 @@ def main():
     args = parse_cli_args()
     logger.debug(f"Parsed CLI args: {args}")
     logger.info(f"Detected model type: {args.model_type}")
+    if args.chain_groups:
+        logger.info(f"Chain groups: {args.chain_groups}")
     scores = ipsae(
         pae_file=args.pae_file,
         structure_file=args.structure_file,
         pae_cutoff=args.pae_cutoff,
         dist_cutoff=args.dist_cutoff,
         model_type=args.model_type,
+        chain_groups=args.chain_groups,
     )
 
     if args.output_dir is not None:
