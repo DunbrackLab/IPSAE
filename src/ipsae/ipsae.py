@@ -628,6 +628,10 @@ def parse_chain_groups(
             raise ValueError(
                 f"Invalid chain group pair: '{pair}'. Both groups must contain at least one chain."
             )
+        if set(group1) & set(group2):
+            raise ValueError(
+                f"Invalid chain group pair: '{pair}'. Groups must not share chains."
+            )
 
         # Add to result if not a duplicate (check both directions)
         pair_key_forward = f"{chain_group_name(group1)}/{chain_group_name(group2)}"
