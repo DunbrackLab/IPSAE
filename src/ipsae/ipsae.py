@@ -57,6 +57,7 @@ import logging
 import math
 import os
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import overload
 
@@ -129,6 +130,42 @@ CHAIN_COLOR = {
     "Y": "limon",
     "Z": "chocolate",
 }
+
+
+# Containers for input and output data
+class InputModelType(Enum):
+    """Supported model types for ipSAE calculation."""
+
+    AF2 = "af2"
+    AF3 = "af3"
+    Boltz1 = "boltz1"
+    Boltz2 = "boltz2"
+
+    def __str__(self):
+        """String representation of the InputModelType."""
+        return self.value
+
+    @classmethod
+    def from_string(cls, model_type_str: str) -> "InputModelType":
+        """Create an InputModelType from a string with better error messages.
+
+        Args:
+            model_type_str: String representation of the model type.
+
+        Returns:
+            Corresponding InputModelType enum member.
+
+        Raises:
+            ValueError: If the string does not correspond to a valid model type.
+        """
+        valid_model_types = {member.value for member in cls}
+        model_type_str_lower = model_type_str.lower()
+        if model_type_str_lower not in valid_model_types:
+            raise ValueError(
+                f"Invalid model type specified: '{model_type_str}'. "
+                f"Valid options are: {valid_model_types}."
+            )
+        return cls(model_type_str_lower)
 
 
 @dataclass
@@ -807,8 +844,6 @@ def load_structure(struct_path: Path) -> StructureData:
                 ):
                     token_mask.append(0)
 
-    logger.debug(f"Parsed _atom_site fields: {atomsitefield_dict}")
-
     # Convert structure information to numpy arrays
     numres = len(residues)
     coordinates = np.array([r.coor for r in cb_residues])
@@ -873,7 +908,7 @@ def load_obj_from_file(file_path: Path):
 
 
 def load_pae_data(
-    pae_path: Path, structure_data: StructureData, model_type: str
+    pae_path: Path, structure_data: StructureData, model_type: InputModelType
 ) -> PAEData:
     """Load PAE, pLDDT, and other scores from various file formats.
 
@@ -925,7 +960,7 @@ def load_pae_data(
     iptm_val = -1.0
     ptm_val = -1.0
 
-    if model_type == "af2":
+    if model_type is InputModelType.AF2:
         # Load all scores from input PAE file
         data = load_obj_from_file(pae_path)
 
@@ -936,19 +971,24 @@ def load_pae_data(
             plddt = np.array(data["plddt"])
             cb_plddt = np.array(data["plddt"])  # for pDockQ
         else:
-            logger.warning(f"pLDDT scores not found in AF2 PAE file: {pae_path}")
+            logger.warning(
+                f"pLDDT scores not found in {model_type.name} PAE file: {pae_path}"
+            )
 
         if "pae" in data:
             pae_matrix = np.array(data["pae"])
         elif "predicted_aligned_error" in data:
             pae_matrix = np.array(data["predicted_aligned_error"])
         else:
-            logger.warning(f"PAE matrix not found in AF2 PAE file: {pae_path}")
+            logger.warning(
+                f"PAE matrix not found in {model_type.name} PAE file: {pae_path}"
+            )
 
-    elif model_type == "boltz1":
+    elif model_type is InputModelType.Boltz1 or model_type is InputModelType.Boltz2:
         # Load pLDDT if file exists
-        plddt_path = pae_path.with_name(pae_path.name.replace("pae", "plddt"))
+        plddt_path = pae_path.with_name(pae_path.name.replace("pae_", "plddt_", 1))
         if plddt_path.exists():
+            logger.debug(f"Loading {model_type.name} pLDDT from file: {plddt_path}")
             data_plddt = load_obj_from_file(plddt_path)
             # Boltz plddt is 0-1, convert to 0-100
             plddt_boltz = np.array(100.0 * data_plddt["plddt"])
@@ -957,7 +997,7 @@ def load_pae_data(
             plddt = plddt_boltz[np.ix_(mask_bool)]
             cb_plddt = plddt_boltz[np.ix_(mask_bool)]
         else:
-            logger.warning(f"Boltz1 pLDDT file not found: {plddt_path}")
+            logger.warning(f"{model_type.name} pLDDT file not found: {plddt_path}")
             ntokens = np.sum(token_array)
             plddt = np.zeros(ntokens)
             cb_plddt = np.zeros(ntokens)
@@ -972,6 +1012,9 @@ def load_pae_data(
             pae_path.name.replace("pae", "confidence")
         ).with_suffix(".json")
         if summary_path.exists():
+            logger.debug(
+                f"Loading {model_type.name} confidence summary from file: {summary_path}"
+            )
             data_summary = load_obj_from_file(summary_path)
             if "pair_chains_iptm" in data_summary:
                 boltz_iptm = data_summary["pair_chains_iptm"]
@@ -984,9 +1027,11 @@ def load_pae_data(
                         # Keys in json are strings of indices
                         iptm_dict[c1][c2] = boltz_iptm[str(i)][str(j)]
         else:
-            logger.warning(f"Boltz1 confidence summary file not found: {summary_path}")
+            logger.warning(
+                f"{model_type.name} confidence summary file not found: {summary_path}"
+            )
 
-    elif model_type == "af3":
+    elif model_type is InputModelType.AF3:
         data = load_obj_from_file(pae_path)
 
         atom_plddts = np.array(data["atom_plddts"])
@@ -1005,7 +1050,9 @@ def load_pae_data(
             pae_full = np.array(data["pae"])
             pae_matrix = pae_full[np.ix_(mask_bool, mask_bool)]
         else:
-            raise ValueError(f"PAE matrix not found in AF3 PAE file: {pae_path}")
+            raise ValueError(
+                f"PAE matrix not found in {model_type.name} PAE file: {pae_path}"
+            )
 
         # Get iptm matrix from AF3 summary_confidences file
         summary_path = None
@@ -1020,6 +1067,9 @@ def load_pae_data(
             )
 
         if summary_path and summary_path.exists():
+            logger.debug(
+                f"Loading {model_type.name} summary confidences from file: {summary_path}"
+            )
             data_summary = load_obj_from_file(summary_path)
             if "chain_pair_iptm" in data_summary:
                 af3_iptm = data_summary["chain_pair_iptm"]
@@ -1030,14 +1080,18 @@ def load_pae_data(
                         iptm_dict[c1][c2] = af3_iptm[i][j]
             else:
                 logger.warning(
-                    f"AF3 summary confidences file missing key 'chain_pair_iptm': {summary_path}"
+                    f"{model_type.name} summary confidences file missing key 'chain_pair_iptm': {summary_path}"
                 )
         elif summary_path:
-            logger.warning(f"AF3 summary confidences file not found: {summary_path}")
+            logger.warning(
+                f"{model_type.name} summary confidences file not found: {summary_path}"
+            )
         else:
             logger.warning(
-                f"Could not determine AF3 summary confidences file path from PAE file: {pae_path}"
+                f"Could not determine {model_type.name} summary confidences file path from PAE file: {pae_path}"
             )
+    else:
+        raise NotImplementedError(f"Unsupported model type: {model_type}")
 
     return PAEData(
         pae_matrix=pae_matrix,
@@ -1763,7 +1817,7 @@ class CliArgs:
     structure_file: Path
     pae_cutoff: float
     dist_cutoff: float
-    model_type: str
+    model_type: InputModelType
     output_dir: Path | None
     chain_groups: str | None
 
@@ -1823,25 +1877,9 @@ def parse_cli_args() -> CliArgs:
 
     # Guess model type from file extensions
     if input_args.model_type != "unknown":
-        model_type = input_args.model_type.lower()
-        if model_type == "boltz2":
-            model_type = "boltz1"  # treat boltz2 same as boltz1
-        if model_type not in {"af2", "af3", "boltz1"}:
-            raise ValueError(f"Invalid model type specified: {model_type}")
+        model_type = InputModelType.from_string(input_args.model_type)
     else:
-        model_type = "unknown"
-        if struct_path.suffix == ".pdb":
-            model_type = "af2"
-        elif struct_path.suffix == ".cif":
-            if pae_path.suffix == ".json":
-                model_type = "af3"
-            elif pae_path.suffix == ".npz":
-                model_type = "boltz1"  # boltz2 is the same
-
-        if model_type == "unknown":
-            raise ValueError(
-                f"Could not determine model type from inputs: {pae_path}, {struct_path}"
-            )
+        model_type = guess_model_type(pae_path, struct_path)
 
     return CliArgs(
         pae_file=pae_path,
@@ -1854,12 +1892,38 @@ def parse_cli_args() -> CliArgs:
     )
 
 
+def guess_model_type(pae_file: Path, structure_file: Path) -> InputModelType:
+    """Guess the model type based on file extensions.
+
+    Args:
+        pae_file: Path to the PAE file.
+        structure_file: Path to the structure file.
+
+    Returns:
+        The guessed model type as an InputModelType enum.
+
+    Raises:
+        ValueError: If the model type cannot be determined.
+    """
+    if structure_file.suffix == ".pdb":
+        return InputModelType.AF2
+    elif structure_file.suffix == ".cif":
+        if pae_file.suffix == ".json":
+            return InputModelType.AF3
+        elif pae_file.suffix == ".npz":
+            return InputModelType.Boltz1  # boltz2 is the same
+
+    raise ValueError(
+        f"Could not determine model type from inputs: {pae_file}, {structure_file}"
+    )
+
+
 def ipsae(
     pae_file: Path,
     structure_file: Path,
     pae_cutoff: float,
     dist_cutoff: float,
-    model_type: str,
+    model_type: str | None = None,
     chain_groups: str | None = None,
 ) -> ScoreResults:
     """Calculate ipSAE, pDockQ, pDockQ2, and LIS scores for protein structure models.
@@ -1869,7 +1933,7 @@ def ipsae(
         structure_file: Path to the structure file (pdb, cif).
         pae_cutoff: Cutoff for PAE to consider a residue pair "good".
         dist_cutoff: Distance cutoff for contact definition.
-        model_type: Type of the model: af2, af3, boltz1.
+        model_type: Type of the model. If None, auto-detects based on file extensions.
         chain_groups: Optional string to parse chain groups from. If provided,
             this takes precedence over chain_groups. Use "..." to include all
             default individual chain permutations. Default is None, which behaves
@@ -1879,14 +1943,21 @@ def ipsae(
         A ScoreResults object containing all calculated scores and output strings.
         The main attributes are chain_pair_scores, by_res_scores, and pymol_script.
     """
+    # Validate model type
+    if model_type is None:
+        model_type_enum = guess_model_type(pae_file, structure_file)
+    else:
+        model_type_enum = InputModelType.from_string(model_type)
+
     # Load data
     structure_data = load_structure(structure_file)
-    pae_data = load_pae_data(pae_file, structure_data, model_type)
+    pae_data = load_pae_data(pae_file, structure_data, model_type_enum)
 
     # Parse chain groups if string is provided
     if chain_groups is None:
         chain_groups = "..."
     parsed_chain_groups = parse_chain_groups(chain_groups, structure_data.unique_chains)
+    logger.debug(f"Parsed chain groups: {parsed_chain_groups}")
 
     # Calculate scores and dump to files
     pdb_stem = structure_file.stem
@@ -1911,7 +1982,7 @@ def main():
         structure_file=args.structure_file,
         pae_cutoff=args.pae_cutoff,
         dist_cutoff=args.dist_cutoff,
-        model_type=args.model_type,
+        model_type=args.model_type.value,
         chain_groups=args.chain_groups,
     )
 
