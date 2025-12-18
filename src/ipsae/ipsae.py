@@ -853,7 +853,8 @@ def load_structure(struct_path: Path) -> StructureData:
     numres = len(residues)
     coordinates = np.array([r.coor for r in cb_residues])
     chains = np.array(chains_list)
-    unique_chains = np.unique(chains)
+    _, uniq_chain_idx = np.unique(chains, return_index=True)
+    unique_chains = chains[np.sort(uniq_chain_idx)]
     token_array = np.array(token_mask)
     residue_types = np.array([r.res for r in residues])
 
@@ -1136,7 +1137,6 @@ def load_pae_data(
             if "per_chain_pair_iptm" in data_summary:  # (1, N_chains, N_chains)
                 boltz_iptm = data_summary["per_chain_pair_iptm"][0]
                 # Map indices to chains
-                # TODO: is this the right order?? `unique_chains` are sorted
                 for i, c1 in enumerate(unique_chains):
                     for j, c2 in enumerate(unique_chains):
                         if c1 == c2:
