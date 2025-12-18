@@ -140,6 +140,7 @@ class InputModelType(Enum):
     AF3 = "af3"
     Boltz1 = "boltz1"
     Boltz2 = "boltz2"
+    Chai1 = "chai-1"
 
     def __str__(self):
         """String representation of the InputModelType."""
@@ -706,10 +707,10 @@ def contiguous_ranges(numbers: set[int]) -> str | None:
     """
     if not numbers:
         return None
-    sorted_numbers = sorted(numbers)
+    sorted_numbers: list[int] = sorted(numbers)
     start = sorted_numbers[0]
     end = start
-    ranges = []
+    ranges: list[str] = []
 
     def format_range(s, e) -> str:
         return f"{s}" if s == e else f"{s}-{e}"
@@ -933,10 +934,14 @@ def load_pae_data(
     |            | plDDT     | plddt_[name]_model_0.npz                  |
     | AF2        | Structure | *.pdb                                     |
     |            | PAE       | *.json                                    |
+    | Chai-1     | Structure | pred.model_idx_0.cif                      |
+    |            | PAE       | pae.model_idx_0.npy                       |
+    |            | plDDT     | plddt.model_idx_0.npy                     |
+    |            | ipTM      | scores.model_idx_0.npz                    |
 
-    TODO: support Chai-1 models.
-        plDDT needs to be extracted from cif structure files.
-        pae needs to be dumped from Chai-1 into (n_samples, N, N) npy files.
+    NOTE: support for Chai-1 models require generating PAE and plDDT files separately.
+        plDDT needs to be extracted from mmCIF files, or dumped after chai_lab.chai1.run_inference.
+        pae needs to be dumped from chai_lab.chai1.run_inference into (N, N) npy files.
         ptm, iptm, per_chain_pair_iptm are in the scores npz files.
 
     Args:
@@ -1023,7 +1028,6 @@ def load_pae_data(
             if "pair_chains_iptm" in data_summary:
                 boltz_iptm = data_summary["pair_chains_iptm"]
                 # Map indices to chains
-                # TODO: is this the right order?
                 for i, c1 in enumerate(unique_chains):
                     for j, c2 in enumerate(unique_chains):
                         if c1 == c2:
@@ -1094,6 +1098,56 @@ def load_pae_data(
             logger.warning(
                 f"Could not determine {model_type.name} summary confidences file path from PAE file: {pae_path}"
             )
+
+    elif model_type is InputModelType.Chai1:
+        # Load pLDDT if file exists
+        plddt_path = pae_path.with_name(pae_path.name.replace("pae.", "plddt.", 1))
+        if plddt_path.exists():
+            logger.debug(f"Loading {model_type.name} pLDDT from file: {plddt_path}")
+            data_plddt = load_obj_from_file(plddt_path)
+            # Chai-1 plddt is 0-1, convert to 0-100
+            plddt_chai1 = np.array(100.0 * data_plddt)
+
+            # Filter by token mask
+            plddt = plddt_chai1[np.ix_(mask_bool)]
+            cb_plddt = plddt_chai1[np.ix_(mask_bool)]
+        else:
+            logger.warning(f"{model_type.name} pLDDT file not found: {plddt_path}")
+            ntokens = np.sum(token_array)
+            plddt = np.zeros(ntokens)
+            cb_plddt = np.zeros(ntokens)
+
+        # Load PAE matrix
+        pae_full = load_obj_from_file(pae_path)
+        pae_matrix = pae_full[np.ix_(mask_bool, mask_bool)]
+
+        # Load ipTM scores if summary file exists
+        summary_path = pae_path.with_name(
+            pae_path.name.replace("pae.", "scores.", 1)
+        ).with_suffix(".npz")
+        if summary_path.exists():
+            logger.debug(
+                f"Loading {model_type.name} confidence summary from file: {summary_path}"
+            )
+            data_summary = load_obj_from_file(summary_path)
+            ptm_val = float(data_summary.get("ptm", -1.0))
+            iptm_val = float(data_summary.get("iptm", -1.0))
+
+            if "per_chain_pair_iptm" in data_summary:  # (1, N_chains, N_chains)
+                boltz_iptm = data_summary["per_chain_pair_iptm"][0]
+                # Map indices to chains
+                # TODO: is this the right order?? `unique_chains` are sorted
+                for i, c1 in enumerate(unique_chains):
+                    for j, c2 in enumerate(unique_chains):
+                        if c1 == c2:
+                            continue
+                        # Keys in json are strings of indices
+                        iptm_dict[c1][c2] = boltz_iptm[i][j]
+        else:
+            logger.warning(
+                f"{model_type.name} confidence summary file not found: {summary_path}"
+            )
+
     else:
         raise NotImplementedError(f"Unsupported model type: {model_type}")
 
@@ -1848,7 +1902,7 @@ def parse_cli_args() -> CliArgs:
     parser.add_argument(
         "-t",
         "--model-type",
-        help="Model type: af2, af3, boltz1, boltz2 (auto-detected if not provided).",
+        help="Model type: af2, af3, boltz1, boltz2, chai-1 (auto-detected if not provided).",
         default="unknown",
     )
     parser.add_argument(
@@ -1915,7 +1969,9 @@ def guess_model_type(pae_file: Path, structure_file: Path) -> InputModelType:
         if pae_file.suffix == ".json":
             return InputModelType.AF3
         elif pae_file.suffix == ".npz":
-            return InputModelType.Boltz1  # boltz2 is the same
+            return InputModelType.Boltz1  # boltz2 is the same\
+        elif pae_file.suffix == ".npy":
+            return InputModelType.Chai1
 
     raise ValueError(
         f"Could not determine model type from inputs: {pae_file}, {structure_file}"
