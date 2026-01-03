@@ -9,8 +9,8 @@
 
 # Roland Dunbrack
 # Fox Chase Cancer Center
-# version 3
-# April 6, 2025
+# version 4
+# January 3, 2026
 # MIT license: script can be modified and redistributed for non-commercial and commercial use, as long as this information is reproduced.
 
 # includes support for Boltz1 structures and structures with nucleic acids
@@ -377,7 +377,9 @@ CA_atom_num=  np.array([res['atom_num']-1 for res in residues])  # for AF3 atom 
 CB_atom_num=  np.array([res['atom_num']-1 for res in cb_residues])  # for AF3 atom indexing from 0
 coordinates = np.array([res['coor']       for res in cb_residues])
 chains = np.array(chains)
-unique_chains = np.unique(chains)
+
+_, first_idx = np.unique(chains, return_index=True)
+unique_chains = chains[np.sort(first_idx)]
 token_array=np.array(token_mask)
 ntokens=np.sum(token_array)
 residue_types=np.array([res['res'] for res in residues])
