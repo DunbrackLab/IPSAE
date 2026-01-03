@@ -1,0 +1,22 @@
+[project]
+name = "ipsae"
+version = "0.1.0"
+description = "Scoring function for interprotein interactions in AlphaFold2 and AlphaFold3"
+readme = "README.md"
+urls = { "Repository" = "https://github.com/DunbrackLab/IPSAE.git" }
+requires-python = ">=3.10"
+license-files = ["LICENSE"]
+authors = [{ name = "Roland Dunbrack" }]
+maintainers = [
+    { name = "Yi Zhou", email = "me@y1zhou.com" },
+]
+dependencies = [
+    "numpy<3.0",
+]
+
+[project.scripts]
+ipsae = "ipsae.ipsae:main"
+
+[build-system]
+requires = ["uv_build>=0.9,<0.10.0"]
+build-backend = "uv_build"

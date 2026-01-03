@@ -1,0 +1,14 @@
+
+Chn1 Chn2  PAE Dist  Type   ipSAE    ipSAE_d0chn ipSAE_d0dom  ipTM_af  ipTM_d0chn     pDockQ     pDockQ2    LIS       n0res  n0chn  n0dom   d0res   d0chn   d0dom  nres1   nres2   dist1   dist2  Model
+A    B     15   15   asym  0.581843    0.743246    0.727856    0.840    0.743246      0.2742     0.6170     0.5646     120    259    237    4.05    5.95    5.71    117     120      58      54   5b8c_unrelaxed_alphafold2_multimer_v3_model_4_seed_000
+B    A     15   15   asym  0.656789    0.788256    0.780388    0.840    0.709500      0.2742     0.6409     0.6250     124    259    245    4.12    5.95    5.80    120     125      54      58   5b8c_unrelaxed_alphafold2_multimer_v3_model_4_seed_000
+A    B     15   15   max   0.656789    0.788256    0.780388    0.840    0.743246      0.2742     0.6409     0.5948     124    259    245    4.12    5.95    5.80    125     120      58      54   5b8c_unrelaxed_alphafold2_multimer_v3_model_4_seed_000
+
+A    C     15   15   asym  0.502334    0.690753    0.671784    0.840    0.690753      0.1153     0.5299     0.5234     111    250    227    3.88    5.85    5.59    116     111      39      42   5b8c_unrelaxed_alphafold2_multimer_v3_model_4_seed_000
+C    A     15   15   asym  0.631856    0.762479    0.753616    0.840    0.690884      0.1153     0.6041     0.6212     125    250    236    4.14    5.85    5.70    111     125      42      39   5b8c_unrelaxed_alphafold2_multimer_v3_model_4_seed_000
+A    C     15   15   max   0.631856    0.762479    0.753616    0.840    0.690884      0.1153     0.6041     0.5723     125    250    236    4.14    5.85    5.70    125     111      39      42   5b8c_unrelaxed_alphafold2_multimer_v3_model_4_seed_000
+
+B    C     15   15   asym  0.853265    0.924288    0.924288    0.840    0.924288      0.5348     0.8645     0.7453     111    231    231    3.88    5.64    5.64    120     111      73      69   5b8c_unrelaxed_alphafold2_multimer_v3_model_4_seed_000
+C    B     15   15   asym  0.863113    0.923924    0.923924    0.840    0.923924      0.5348     0.8976     0.7608     120    231    231    4.05    5.64    5.64    111     120      69      73   5b8c_unrelaxed_alphafold2_multimer_v3_model_4_seed_000
+B    C     15   15   max   0.863113    0.924288    0.924288    0.840    0.924288      0.5348     0.8976     0.7531     120    231    231    4.05    5.64    5.64    120     111      73      69   5b8c_unrelaxed_alphafold2_multimer_v3_model_4_seed_000
+
