@@ -1,27 +1,105 @@
-# IPSAE
-Scoring function for interprotein interactions in AlphaFold2 and AlphaFold3
+# ipSAE
+Scoring function for interprotein interactions in AlphaFold, ESMfold2, and Boltz models.
+
+Calculates the **ipSAE** score (https://www.biorxiv.org/content/10.1101/2025.02.10.637595v2) as well as **ipTM**, **pDockQ**, **pDockQ2**, and **LIS** for every chain pair in a predicted structure.
 
 # Installation
-Simply download the Python script ipsae.py. It may be necessary to install the Python numpy package with:
 
-    pip install numpy
+ipSAE is an installable Python package (requires Python >= 3.8 and numpy):
 
-# Usage:                                                                                                                                                                                                     
+    pip install .
+
+or directly from GitHub:
+
+    pip install git+https://github.com/DunbrackLab/IPSAE.git
+
+This installs the `ipsae` console command and the `ipsae` Python library.
+
+Alternatively, the standalone script still works without installation — simply download `ipsae.py` and run it with Python (only numpy is required: `pip install numpy`).
+
+# Command-line usage
+
+All of the following are equivalent (`ipsae` console command, `python -m ipsae`, or the legacy script):
+
 AlphaFold2:
 
-     python ipsae.py <path_to_af2_json_file> <path_to_af2_pdb_file> <pae_cutoff> <dist_cutoff>   
-     python ipsae.py RAF1_KSR1_scores_rank_001_alphafold2_multimer_v3_model_4_seed_003.json RAF1_KSR1_unrelaxed_rank_001_alphafold2_multimer_v3_model_4_seed_003.pdb 15 15
+     ipsae <path_to_af2_json_file> <path_to_af2_pdb_file> <pae_cutoff> <dist_cutoff>
+     ipsae RAF1_KSR1_scores_rank_001_alphafold2_multimer_v3_model_4_seed_003.json RAF1_KSR1_unrelaxed_rank_001_alphafold2_multimer_v3_model_4_seed_003.pdb 15 15
 
 AlphaFold3:
 
-     python ipsae.py <path_to_af3_json_file> <path_to_af3_cif_file> <pae_cutoff> <dist_cutoff>                    
-     python ipsae.py fold_aurka_tpx2_full_data_0.json fold_aurka_tpx2_model_0.cif 10 10
+     ipsae <path_to_af3_json_file> <path_to_af3_cif_file> <pae_cutoff> <dist_cutoff>
+     ipsae fold_aurka_tpx2_full_data_0.json fold_aurka_tpx2_model_0.cif 10 10
 
-Boltz1:
+ESMfold2:
 
-     python ipsae.py <path_to_boltz1_pae_npz_file> <path_to_boltz1_cif_file> <pae_cutoff> <dist_cutoff>
-     python ipsae.py pae_AURKA_TPX2_model_0.npz  AURKA_TPX2_model_0.cif 10 10
+     ipsae <path_to_esmfold2_pae_json_file> <path_to_esmfold2_cif_file> <pae_cutoff> <dist_cutoff>
+     ipsae esmfold2_complex_pae.json esmfold2_complex.cif 10 10
 
+Boltz1/Boltz2:
+
+     ipsae <path_to_boltz_pae_npz_file> <path_to_boltz_cif_file> <pae_cutoff> <dist_cutoff>
+     ipsae pae_AURKA_TPX2_model_0.npz  AURKA_TPX2_model_0.cif 10 10
+
+The legacy invocation is unchanged:
+
+     python ipsae.py <path_to_af2_json_file> <path_to_af2_pdb_file> <pae_cutoff> <dist_cutoff>
+
+Options:
+
+* `--model <af2|af3|boltz2|esmfold2>` — explicitly set the prediction source (recommended for `.cif + .json` inputs)
+* `--csv` — additionally write the chain-pair scores as a machine-readable CSV file
+* `--version` — print the version and exit
+* `-h, --help` — print usage information
+
+Gzipped PAE files (e.g. `scores.json.gz` as produced by ColabFold) are read transparently. All output files are written to the same folder as the CIF/PDB file.
+For `.cif + .json` inputs, use `--model` to avoid ambiguity between AF3 and ESMfold2. If omitted, ipSAE falls back to filename/schema heuristics. ESMfold2 pairwise chain ipTM values are not expected and default to 0. ESMfold2 PAE JSON can be either a keyed object (`predicted_aligned_error`/`pae`) or a raw top-level PAE matrix array.
+
+# Python API
+
+```python
+from ipsae import score_interactions
+
+## Automatic model detection:
+result = score_interactions("fold_aurka_tpx2_full_data_0.json",
+                            "fold_aurka_tpx2_model_0.cif",
+                            pae_cutoff=10, dist_cutoff=10)
+
+## Explicit model source ('af2', 'af3', 'boltz2', or 'esmfold2'):
+result = score_interactions("esmfold2_complex_pae.json",
+                            "esmfold2_complex.cif",
+                            pae_cutoff=10, dist_cutoff=10,
+                            model="esmfold2")
+
+## chain-pair records (asym and max rows, same values as the .txt output)
+for record in result.chain_pairs:
+    print(record["Chn1"], record["Chn2"], record["Type"], record["ipSAE"])
+
+## direct score lookup: metric is any output column (ipSAE, ipSAE_d0chn,
+## ipSAE_d0dom, ipTM_af, ipTM_d0chn, pDockQ, pDockQ2, LIS, ...)
+print(result.get_score("A", "B", "ipSAE"))                    # max of both directions
+print(result.get_score("A", "B", "ipSAE", score_type="asym")) # A-aligned direction
+
+## by-residue records (same values as the _byres.txt output)
+print(result.residues[0])
+
+## write the standard output files and/or a CSV
+result.write_outputs()
+result.to_csv()
+```
+
+# What's new in version 4.1
+
+* Installable package (`pip install .`) with an `ipsae` console command, `python -m ipsae`, and a programmatic API; the original `python ipsae.py` interface is fully preserved and produces byte-identical output files.
+* Optional CSV output (`--csv` or `result.to_csv()`).
+* Transparent support for gzipped PAE JSON files.
+* ~10x faster on large complexes (vectorized pTM transform).
+* Bug fixes in the scoring logic:
+  * the "max" rows are now correct when chains appear in non-alphabetical order in the structure file (previously one direction could be missed);
+  * Boltz confidence files without a `pair_chains_iptm` entry no longer crash the script;
+  * companion files (Boltz pLDDT/confidence, AF3 summary confidences) are located correctly when directory names contain "pae" or "confidences";
+  * AlphaFold2 PAE files missing the `pae` key and PAE matrices that do not match the structure size now produce clear error messages.
+* Regression test suite (`pip install -e ".[test]" && pytest`) verifying byte-identical outputs against the original script.
 
 # Output chain-chain score file
 

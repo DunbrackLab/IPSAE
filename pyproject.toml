@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ipsae"
+version = "4.1.1"
+description = "ipSAE: scoring pairwise protein-protein interactions in AlphaFold and Boltz structure predictions"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+authors = [
+    { name = "Roland L. Dunbrack Jr." },
+    { name = "Colby T. Ford" },
+]
+keywords = [
+    "alphafold",
+    "boltz",
+    "ipsae",
+    "iptm",
+    "pae",
+    "protein-protein interaction",
+    "structural biology",
+]
+classifiers = [
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+dependencies = [
+    "numpy>=1.20",
+]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[project.urls]
+Homepage = "https://github.com/DunbrackLab/IPSAE"
+Paper = "https://www.biorxiv.org/content/10.1101/2025.02.10.637595v2"
+
+[project.scripts]
+ipsae = "ipsae.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

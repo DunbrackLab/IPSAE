@@ -1,0 +1,8 @@
+# Chn1 Chn2  PAE Dist  Type   ipSAE    ipSAE_d0chn ipSAE_d0dom  ipTM_af  ipTM_d0chn     pDockQ     pDockQ2    LIS      n0res  n0chn  n0dom   d0res   d0chn   d0dom  nres1   nres2   dist1   dist2  Model
+# A    B     10   10   asym  0.447187    0.611687    0.571735    0.000    0.596498      0.0183     0.0073     0.2652     230    498    408    5.63    7.93    7.28    178     230      15      25   predicted_structure
+alias color_A_B, color gray80, all; color magenta, chain  A and resi 35-41+44-60+65-96+99-118+121-153+185-239+241-254; color marine, chain  B and resi 1-118+130-241
+
+# B    A     10   10   asym  0.404228    0.595242    0.562784    0.000    0.523481      0.0183     0.0073     0.2985     201    498    422    5.28    7.93    7.39    220     202      26      18   predicted_structure
+# A    B     10   10   max   0.447187    0.611687    0.571735    0.000    0.596498      0.0183     0.0073     0.2818     230    498    408    5.63    7.93    7.28    202     230      18      26   predicted_structure
+alias color_B_A, color gray80, all; color marine, chain  B and resi 1-116+136-239; color magenta, chain  A and resi 36-152+168-175+181-257
+

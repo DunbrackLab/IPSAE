@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.eggs/
+
+# Environments
+.venv/
+venv/
+
+# Test caches
+.pytest_cache/
+
+# macOS Crap
+.DS_Store

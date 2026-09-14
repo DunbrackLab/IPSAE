@@ -1,0 +1,8 @@
+# Chn1 Chn2  PAE Dist  Type   ipSAE    ipSAE_d0chn ipSAE_d0dom  ipTM_af  ipTM_d0chn     pDockQ     pDockQ2    LIS      n0res  n0chn  n0dom   d0res   d0chn   d0dom  nres1   nres2   dist1   dist2  Model
+# A    B     10   10   asym  0.448952    0.826070    0.821676    0.000    0.784419      0.5235     0.7120     0.6487      40    319    305    1.83    6.54    6.41    264      41      52      34   fold_aurka_0_tpx2_0_model_0
+alias color_A_B, color gray80, all; color magenta, chain  A and resi 1-264; color marine, chain  B and resi 3-43
+
+# B    A     10   10   asym  0.866498    0.882996    0.877746    0.000    0.861157      0.5235     0.6278     0.6643     268    319    301    6.04    6.54    6.37     33     268      31      50   fold_aurka_0_tpx2_0_model_0
+# A    B     10   10   max   0.866498    0.882996    0.877746    0.000    0.861157      0.5235     0.7120     0.6565     268    319    301    6.04    6.54    6.37    268      41      52      34   fold_aurka_0_tpx2_0_model_0
+alias color_B_A, color gray80, all; color marine, chain  B and resi 6-23+29-43; color magenta, chain  A and resi 1-268
+
