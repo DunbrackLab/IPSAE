@@ -39,7 +39,7 @@ mkdir -p "$OUT_DIR" logs
 # ipsae.py needs only numpy, so any env with numpy works.
 # Easiest: reuse your boltz2 env, since Boltz already had numpy.
 module load Anaconda3/2023.07-2
-source activate boltz2   # <-- change if your env is named differently
+source activate boltz    # conda env with numpy; any numpy env is fine
 
 # ---------------------- arm table ---------------------------
 # index: ARMS[i] uses ROOTS[i] and, for crystal_MSA only, filters by the manifest.
