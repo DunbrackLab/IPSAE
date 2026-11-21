@@ -7,8 +7,8 @@
 #SBATCH --mem=12G
 #SBATCH --time=06:00:00
 #SBATCH --partition=amd-hdr100
-#SBATCH --output=logs/ipsae_%A_%a.out
-#SBATCH --error=logs/ipsae_%A_%a.err
+#SBATCH --output=ipsae_%A_%a.out
+#SBATCH --error=ipsae_%A_%a.err
 
 # ipsae_array.slurm
 # One SLURM array task per co-folding arm. ipSAE scoring is CPU-only
@@ -33,7 +33,7 @@ OUT_DIR="$WORKDIR/ipsae_out"
 PAE_CUT=10
 DIST_CUT=10
 
-mkdir -p "$OUT_DIR" logs
+mkdir -p "$OUT_DIR"
 
 # ---------------------- environment --------------------------
 # ipsae.py needs only numpy, so any env with numpy works.
