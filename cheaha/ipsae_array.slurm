@@ -24,7 +24,10 @@ set -euo pipefail
 
 # ---------------------- paths and knobs ----------------------
 WORKDIR="$HOME/Foundry/ClusterCentroids_MDresults_MatureAlpha/Equilibrated"
-IPSAE_REPO="$HOME/IPSAE_Loop1_Binders"
+# Auto-derive IPSAE_REPO from the SLURM script's own location, so this
+# works no matter where you cloned the repo (sbatch sets SLURM_SUBMIT_DIR
+# to the dir you ran sbatch from, which is cheaha/).
+IPSAE_REPO="$(cd "${SLURM_SUBMIT_DIR:-.}/.." && pwd)"
 IPSAE_PY="$IPSAE_REPO/ipsae.py"
 BATCH="$IPSAE_REPO/cheaha/ipsae_batch.py"
 
@@ -72,7 +75,7 @@ srun python "$BATCH" \
     --pae-cutoff "$PAE_CUT" \
     --dist-cutoff "$DIST_CUT" \
     --jobs "${SLURM_CPUS_PER_TASK:-1}" \
-    "${MANIFEST_ARG[@]}" \
+    ${MANIFEST_ARG[@]+"${MANIFEST_ARG[@]}"} \
     --out "$OUT"
 
 echo "[$ARM] array task $i finished."
